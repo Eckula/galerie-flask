@@ -1,0 +1,50 @@
+<!-- templates/index.html — ACCUEIL : cartes XXL avec <img> plein-cadre -->
+{% extends "base.html" %}
+{% block title %}Famille XXXX — Accueil{% endblock %}
+{% block section %}Accueil{% endblock %}
+
+{% block content %}
+<section class="hero-center">
+  <h1>Famille XXXX— Accueil</h1>
+  <p class="subtitle">Bienvenue sur notre espace familial — retrouvez photos, vidéos, souvenirs et événements.</p>
+
+  <!-- Place tes images dans static/img/ avec ces noms -->
+  <div class="cards cards-hero">
+    <a class="card-hero" href="{{ url_for('gallery') }}?tab=photos">
+      <img class="card-hero__bg" src="{{ url_for('static', filename='img/home_photos.jpg') }}" alt="" />
+      <div class="card-hero__fade"></div>
+      <div class="card-hero__text"><h3>Photos</h3><p>Images souvenirs.</p></div>
+    </a>
+
+    <a class="card-hero" href="{{ url_for('gallery') }}?tab=videos">
+      <img class="card-hero__bg" src="{{ url_for('static', filename='img/home_videos.jpg') }}" alt="" />
+      <div class="card-hero__fade"></div>
+      <div class="card-hero__text"><h3>Vidéos</h3><p>Clips et vlogs.</p></div>
+    </a>
+
+    <a class="card-hero" href="{{ url_for('gallery') }}?tab=documents">
+      <img class="card-hero__bg" src="{{ url_for('static', filename='img/home_docs.jpg') }}" alt="" />
+      <div class="card-hero__fade"></div>
+      <div class="card-hero__text"><h3>Documents</h3><p>PDF & partages.</p></div>
+    </a>
+
+    <a class="card-hero" href="{{ url_for('gallery') }}?tab=audio">
+      <img class="card-hero__bg" src="{{ url_for('static', filename='img/home_audio.jpg') }}" alt="" />
+      <div class="card-hero__fade"></div>
+      <div class="card-hero__text"><h3>Audio</h3><p>Voix & sons.</p></div>
+    </a>
+
+    <a class="card-hero" href="{{ url_for('gallery') }}?tab=albums">
+      <img class="card-hero__bg" src="{{ url_for('static', filename='img/home_albums.jpg') }}" alt="" />
+      <div class="card-hero__fade"></div>
+      <div class="card-hero__text"><h3>Albums</h3><p>Par thème ou date.</p></div>
+    </a>
+
+    <a class="card-hero" href="{{ url_for('gallery') }}">
+      <img class="card-hero__bg" src="{{ url_for('static', filename='img/home_events.jpg') }}" alt="" />
+      <div class="card-hero__fade"></div>
+      <div class="card-hero__text"><h3>Galerie</h3><p>Tous les médias.</p></div>
+    </a>
+  </div>
+</section>
+{% endblock %}

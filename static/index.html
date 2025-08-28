@@ -1,0 +1,49 @@
+<!-- galerie-flask/static/index.html -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Ma Galerie</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    .gallery { display: flex; flex-wrap: wrap; gap: 10px; }
+    .gallery img { width: 150px; height: auto; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+    .card { display: flex; flex-direction: column; align-items: center; }
+    button { margin-top: 5px; padding: 5px 10px; }
+  </style>
+</head>
+<body>
+  <h1>📸 Ma Galerie</h1>
+  <div class="gallery" id="gallery"></div>
+
+  <script>
+    async function fetchMedias() {
+      const response = await fetch("/api/media/list?folder_id=1");
+      const medias = await response.json();
+
+      const gallery = document.getElementById("gallery");
+      gallery.innerHTML = "";
+      medias.forEach(media => {
+        const div = document.createElement("div");
+        div.className = "card";
+        div.innerHTML = `
+          <img src="${media.url}" alt="image ${media.id}" />
+          <button onclick="deleteMedia(${media.id})">Supprimer</button>
+        `;
+        gallery.appendChild(div);
+      });
+    }
+
+    async function deleteMedia(id) {
+      await fetch("/api/media/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id })
+      });
+      fetchMedias(); // recharge la galerie
+    }
+
+    fetchMedias(); // Charger au démarrage
+  </script>
+</body>
+</html>

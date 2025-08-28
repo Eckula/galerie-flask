@@ -1,0 +1,84 @@
+<!-- templates/base.html  ─────────────────────────────────────────────────── -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Famille XXXX{% endblock %}</title>
+  <link rel="preload" href="{{ url_for('static', filename='video/family-bg.mp4') }}" as="video" type="video/mp4">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <style>
+    header.topbar{position:sticky;top:0;z-index:10;background:rgba(12,12,14,.92);backdrop-filter:blur(6px)}
+    header.topbar .brand a{color:#fff !important;text-decoration:none}
+    header.topbar .topnav a, .drawer a{color:#e9e9ea !important;text-decoration:none;margin:0 .6rem}
+    header.topbar .topnav a:hover, .drawer a:hover{color:#fff !important;text-decoration:underline}
+    @media (max-width:900px){header.topbar .topnav{display:none}}
+    .global-bg{position:fixed;inset:0;min-width:100%;min-height:100%;object-fit:cover;z-index:-2;filter:brightness(.45)}
+    .overlay{position:fixed;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.2),rgba(0,0,0,.35));z-index:-1}
+    .pill{display:inline-flex;align-items:center;gap:.4rem;padding:.25rem .6rem;border-radius:999px;background:rgba(255,255,255,.08);color:#fff}
+  </style>
+</head>
+<body>
+  <video class="bg-video global-bg" src="{{ url_for('static', filename='video/family-bg.mp4') }}" autoplay muted loop playsinline></video>
+  <div class="overlay"></div>
+
+  <header class="topbar">
+    <div class="brand"><a href="{{ url_for('home') }}">Famille XXXX</a> — <span class="section">{% block section %}{% endblock %}</span></div>
+    <nav class="topnav">
+      <a href="{{ url_for('gallery') }}">Galerie</a>
+      <a href="{{ url_for('gallery') }}?tab=photos">Photos</a>
+      <a href="{{ url_for('gallery') }}?tab=videos">Vidéos</a>
+      <a href="{{ url_for('gallery') }}?tab=documents">Documents</a>
+      <a href="{{ url_for('gallery') }}?tab=audio">Audio</a>
+      <a href="{{ url_for('gallery') }}?tab=albums">Albums</a>
+      <a href="#">Événements</a>
+      <a href="#">Jeux</a>
+      <a href="#">Admin</a>
+    </nav>
+    <div class="spacer"></div>
+    <div id="weather" class="pill">—°</div>
+    <div id="clock" class="pill">00:00:00</div>
+    <button id="burger" class="burger" aria-label="menu">☰</button>
+  </header>
+
+  <nav id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-header">
+      <strong>Menu</strong>
+      <button id="closeDrawer" aria-label="fermer">✕</button>
+    </div>
+    <ul>
+      <li><a href="{{ url_for('home') }}">Accueil</a></li>
+      <li><a href="{{ url_for('gallery') }}">Galerie</a></li>
+      <li><a href="{{ url_for('gallery') }}?tab=photos">Photos</a></li>
+      <li><a href="{{ url_for('gallery') }}?tab=videos">Vidéos</a></li>
+      <li><a href="{{ url_for('gallery') }}?tab=documents">Documents</a></li>
+      <li><a href="{{ url_for('gallery') }}?tab=audio">Audio</a></li>
+      <li><a href="{{ url_for('gallery') }}?tab=albums">Albums</a></li>
+    </ul>
+  </nav>
+
+  {% block hero %}{% endblock %}
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+  // Horloge HH:MM:SS
+  (function(){const el=document.getElementById('clock'),pad=n=>String(n).padStart(2,'0');function t(){const d=new Date();el.textContent=`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;}t();setInterval(t,1000);})();
+  // Météo (cache 2h, pas de popup)
+  (async function(){
+    const pill=document.getElementById('weather'); const KEY='wx_cache_v1'; const TTL=2*60*60*1000;
+    try{
+      const c=localStorage.getItem(KEY); if(c){const j=JSON.parse(c); if(Date.now()-j.t<TTL){pill.textContent=`${Math.round(j.temp)}° ${j.city||''}`.trim();}}
+      async function j(u){try{const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw 0;return await r.json();}catch{return null;}}
+      let lat=null,lon=null,city='';
+      if(navigator.permissions&&navigator.permissions.query){const s=await navigator.permissions.query({name:'geolocation'});if(s.state==='granted'){await new Promise(res=>navigator.geolocation.getCurrentPosition(p=>{lat=p.coords.latitude;lon=p.coords.longitude;res()},()=>res(),{maximumAge:600000,timeout:1500}));}}
+      if(lat==null){const ip=await j('https://ipapi.co/json/')||await j('https://ipinfo.io/json'); if(ip){lat=ip.latitude||(ip.loc?ip.loc.split(',')[0]:null);lon=ip.longitude||(ip.loc?ip.loc.split(',')[1]:null);city=(ip.city||'').trim();}}
+      if(lat&&lon){const w=await j(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);const t=w?.current_weather?.temperature;if(t!=null){pill.textContent=`${Math.round(t)}° ${city}`.trim();localStorage.setItem(KEY,JSON.stringify({t:Date.now(),temp:t,city}));}}
+    }catch{}
+  })();
+  </script>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

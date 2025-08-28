@@ -1,0 +1,167 @@
+cd /c/dev/galerie-flask
+source venv/Scripts/activate
+
+
+cd /c/dev/galerie-flask
+bash run_5001.sh
+# → http://127.0.0.1:5001
+
+
+# depuis le dossier du projet
+source venv/Scripts/activate   # (ou venv/bin/activate sous Linux/macOS)
+flask --app app.py run
+
+
+Réponses directes
+
+Tester tes modifs ? Oui, sur le port 5001 si tu lances avec bash run_5001.sh. Le script met FLASK_DEBUG=1, donc chaque sauvegarde d’un fichier (HTML/CSS/JS/Python) recharge automatiquement. Ouvre http://127.0.0.1:5001/ et …/gallery.
+
+Les scripts locaux sont à jour ? Oui. On a créé de vrais fichiers dans ton projet :
+
+run_5001.sh
+
+kill_port.sh
+
+create_placeholders.sh
+Ils sont enregistrés sur disque dans C:\dev\galerie-flask. Tu peux les voir/éditer comme n’importe quel fichier.
+
+Rappels ultra-courts
+
+Démarrer (dev, port 5001)
+
+cd /c/dev/galerie-flask
+bash run_5001.sh
+# → http://127.0.0.1:5001
+
+
+Vérifier qu’ils sont bien là
+
+cd /c/dev/galerie-flask
+ls -l run_5001.sh kill_port.sh create_placeholders.sh
+
+
+Si le port est bloqué
+
+bash kill_port.sh 5001
+bash run_5001.sh
+
+
+Si tu veux bosser sur 5000 à la place
+
+export FLASK_APP=app.py
+export FLASK_DEBUG=1
+flask run -p 5000
+
+
+(je peux te fournir un run_5000.sh identique si tu veux)
+
+Packages Python ajoutés
+
+pip install <package>
+pip freeze > requirements.txt
+
+
+Modifs de modèles
+
+flask --app app.py db migrate -m "change"
+flask --app app.py db upgrade
+
+
+Bref : ouvre run_5001.sh, bosse, sauvegarde → auto-reload et teste sur :5001. Les scripts ne sont pas “forcés” ni temporaires : ils font partie de ton projet.
+
+
+
+
+
+
+
+
+
+
+
+
+#####################IMPORTATN ###################################
+
+3) Script Bash pour lancer en dev sur 5001
+
+Crée run_5001.sh (dans C:\dev\galerie-flask) :
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# venv si besoin
+[ -d venv ] || python -m venv venv
+
+# activer venv (Git Bash Windows ou Linux)
+source venv/Scripts/activate 2>/dev/null || source venv/bin/activate
+
+# deps
+pip install -r requirements.txt
+# dev-only : livereload pour rafraîchir le navigateur automatiquement
+pip install livereload Flask-Migrate >/dev/null 2>&1 || true
+
+export FLASK_APP=app.py
+export FLASK_DEBUG=1
+
+echo "== Routes =="
+flask --app app.py routes
+
+# Si livereload est dispo -> dev_hotreload; sinon Flask standard
+python - <<'PY' 2>/dev/null || exec flask run -p 5001
+import importlib, sys, subprocess
+try:
+    importlib.import_module('livereload')
+    subprocess.run([sys.executable, 'dev_hotreload.py'])
+except Exception as e:
+    raise SystemExit(1)
+PY
+
+
+Donne les droits et lance :
+
+cd /c/dev/galerie-flask
+chmod +x run_5001.sh
+bash run_5001.sh
+# Ouvre : http://127.0.0.1:5001/
+
+
+Avec livereload : ton navigateur se recharge tout seul dès que tu sauvegardes un fichier dans templates/ ou static/.
+
+Sans livereload : un simple F5 suffit; pas de cache grâce à app.py.
+
+4) (facultatif) Tueur de port
+
+Si 5001 est occupé, crée kill_port.sh :
+
+#!/usr/bin/env bash
+set -euo pipefail
+PORT="${1:-5001}"
+PIDS=$(netstat -ano | grep ":$PORT" | awk '{print $5}' | grep -E '^[0-9]+$' | sort -u || true)
+if [ -z "${PIDS}" ]; then
+  echo "Aucun process sur le port ${PORT}."
+  exit 0
+fi
+for pid in $PIDS; do
+  echo "Killing PID $pid on port ${PORT}"
+  cmd.exe /c taskkill /PID "$pid" /F >/dev/null 2>&1 || true
+done
+echo "✅ Port ${PORT} libéré."
+
+
+Usage :
+
+bash kill_port.sh 5001
+bash run_5001.sh
+
+En pratique
+
+Tu modifies un visuel (HTML/CSS/JS/SVG/image) →
+
+Si livereload tourne : la page se rafraîchit seule.
+
+Sinon : Ctrl+F5 (pas de cache, c’est instantané).
+
+Tu modifies du Python → le serveur redémarre (FLASK_DEBUG=1).
+
+Si tu veux la même chose sur port 5000, je te file run_5000.sh.

@@ -1,0 +1,316 @@
+<!-- templates/gallery.html  ─────────────────────────────────────────────── -->
+{% extends "base.html" %}
+{% block title %}Famille XXXX — Galerie{% endblock %}
+{% block section %}Galerie{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h2>Galerie</h2>
+  <p class="muted">Photos, vidéos, audio et documents depuis Cloudinary (et YouTube).</p>
+</section>
+
+<div style="display:flex;gap:.6rem;flex-wrap:wrap;margin:.3rem 0 1rem">
+  <input id="albumSearch" class="pill" placeholder="Rechercher un album…" style="min-width:220px;">
+  <select id="albumSort" class="pill">
+    <option value="az">Tri : A → Z</option>
+    <option value="za">Tri : Z → A</option>
+    <option value="recent">Tri : récents</option>
+    <option value="oldest">Tri : anciens</option>
+    <option value="count">Tri : plus fournis</option>
+  </select>
+  <button id="manageToggle" class="pill">⚙️ Gérer</button>
+</div>
+
+<div id="albumChips" class="album-chips"></div>
+
+<div id="albumAdmin" class="upload-panel" hidden>
+  <div class="row">
+    <label>Renommer : <select id="renameFolderSel"></select></label>
+    <input id="renameFolderName" placeholder="Nouveau nom">
+    <button id="renameBtn" class="pill">Renommer</button>
+    <span style="width:2rem"></span>
+    <label>Fusionner : <select id="mergeSrcSel"></select></label>
+    <label>→ <select id="mergeDstSel"></select></label>
+    <button id="mergeBtn" class="pill">Fusionner</button>
+  </div>
+</div>
+
+<div class="gallery-toolbar">
+  <div class="tabs" id="typeTabs">
+    <button class="tab" data-type="all">Tout</button>
+    <button class="tab" data-type="photos">Photos</button>
+    <button class="tab" data-type="videos">Vidéos</button>
+    <button class="tab" data-type="audio">Audio</button>
+    <button class="tab" data-type="documents">Documents</button>
+  </div>
+  <div class="actions">
+    <button id="refreshBtn" class="pill">Rafraîchir</button>
+    <button id="selectAllBtn" class="pill">Tout sélectionner (vue)</button>
+    <button id="deleteSelBtn" class="pill">Supprimer sélection</button>
+    <button id="downloadSelBtn" class="pill">Télécharger (vue)</button>
+    <label class="pill btn-file"><span>+ Ajouter des médias</span>
+      <input id="fileInput" type="file" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
+    </label>
+    <button id="addYT" class="pill">+ Lien YouTube</button>
+  </div>
+</div>
+
+<form id="uploadForm" action="/api/media/upload" method="post" enctype="multipart/form-data" class="upload-panel" hidden>
+  <input type="file" name="image" id="uploadFileHidden" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" required hidden>
+  <div class="row">
+    <label>Album existant : <select name="folder_id" id="folderSelect"><option value="">— Choisir —</option></select></label>
+    <span>ou</span>
+    <label>Nouvel album : <input type="text" name="new_folder" id="newFolderInput" placeholder="Nom de l’album"></label>
+    <button type="submit" class="pill">Uploader</button>
+  </div>
+  <p id="msg" class="muted"></p>
+</form>
+
+<div id="grid" class="grid"></div>
+<div id="sentinel" style="height:1px"></div>
+
+<!-- Lightbox -->
+<div id="lightbox" class="lightbox" aria-hidden="true">
+  <div class="lb-backdrop" id="lbBackdrop"></div>
+  <div class="lb-content">
+    <button class="lb-close" id="lbClose" aria-label="Fermer">✕</button>
+    <div class="lb-top">
+      <div id="lbCounter" class="pill">—/—</div>
+      <div class="lb-actions">
+        <a id="lbDownload" class="pill" target="_blank" download>Télécharger</a>
+        <a id="lbOpen" class="pill" target="_blank">Ouvrir</a>
+        <button id="lbAltViewer" class="pill" hidden>Autre visionneuse</button>
+      </div>
+    </div>
+    <div class="lb-media" id="lbMedia"></div>
+    <button class="lb-prev" id="lbPrev" aria-label="Précédent">←</button>
+    <button class="lb-next" id="lbNext" aria-label="Suivant">→</button>
+  </div>
+</div>
+
+<script>
+const grid=document.getElementById('grid'), chips=document.getElementById('albumChips');
+const folderSelect=document.getElementById('folderSelect'), uploadForm=document.getElementById('uploadForm');
+const fileInputBtn=document.getElementById('fileInput'), hiddenFile=document.getElementById('uploadFileHidden'), msg=document.getElementById('msg');
+const typeTabs=document.getElementById('typeTabs'), sentinel=document.getElementById('sentinel');
+const searchEl=document.getElementById('albumSearch'), sortEl=document.getElementById('albumSort'), adminToggle=document.getElementById('manageToggle');
+const adminPanel=document.getElementById('albumAdmin');
+const rnSel=document.getElementById('renameFolderSel'), rnName=document.getElementById('renameFolderName'), rnBtn=document.getElementById('renameBtn');
+const mSrc=document.getElementById('mergeSrcSel'), mDst=document.getElementById('mergeDstSel'), mBtn=document.getElementById('mergeBtn');
+const addYT=document.getElementById('addYT'), newFolderInput=document.getElementById('newFolderInput');
+
+const lb=document.getElementById('lightbox'), lbMedia=document.getElementById('lbMedia'),
+      lbPrev=document.getElementById('lbPrev'), lbNext=document.getElementById('lbNext'),
+      lbClose=document.getElementById('lbClose'), lbCounter=document.getElementById('lbCounter'),
+      lbOpen=document.getElementById('lbOpen'), lbDownload=document.getElementById('lbDownload'),
+      lbBackdrop=document.getElementById('lbBackdrop'), lbAltViewer=document.getElementById('lbAltViewer');
+
+let currentFolder=null;
+let currentType=(new URLSearchParams(location.search).get('tab')||'all').toLowerCase();
+if(currentType==='gallery'||currentType==='albums') currentType='all';
+let offset=0, limit=60, loading=false, has_more=true;
+const selected=new Set(); let visibleItems=[]; let lbIndex=0; let cachedFolders=[];
+
+const isPDF=u=>/\.pdf($|\?)/i.test(u||'');
+const isOffice=u=>/\.(docx?|pptx?|xlsx?)($|\?)/i.test(u||'');
+const isYT=u=>(/youtu\.be|youtube\.com/i.test(u||''));
+const ytId=u=>{const m=(u||'').match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{6,})/);return m?m[1]:null;};
+
+function h(t,p={},...c){const e=document.createElement(t);Object.assign(e,p);for(const x of c){e.append(x?.nodeType?x:document.createTextNode(x))}return e;}
+function setActiveTab(t){currentType=t; document.querySelectorAll('#typeTabs .tab').forEach(b=>b.classList.toggle('active', b.dataset.type===t));}
+
+/* ===== ALBUMS ===== */
+async function loadFolders(){
+  try{
+    const q=new URLSearchParams(); q.set('sort', sortEl.value); if(searchEl.value.trim()) q.set('q', searchEl.value.trim());
+    const r=await fetch('/api/folders/list?'+q.toString()); if(!r.ok) throw new Error('HTTP '+r.status);
+    cachedFolders=await r.json();
+
+    chips.innerHTML='';
+    chips.append(h('button',{className:'chip '+(currentFolder===null?'active':''),textContent:'Mes fichiers',onclick(){currentFolder=null; resetAndLoad();}}));
+    for(const f of cachedFolders){
+      const lab=(f.count?`${f.name} (${f.count})`:f.name);
+      chips.append(h('button',{className:'chip'+(currentFolder===f.id?' active':''),textContent:lab,onclick(){currentFolder=f.id; resetAndLoad();}}));
+    }
+
+    folderSelect.innerHTML='<option value="">— Choisir —</option>';
+    rnSel.innerHTML=''; mSrc.innerHTML=''; mDst.innerHTML='';
+    for(const f of cachedFolders){
+      folderSelect.append(h('option',{value:f.id, textContent:f.name}));
+      rnSel.append(h('option',{value:f.id, textContent:f.name}));
+      mSrc.append(h('option',{value:f.id, textContent:f.name}));
+      mDst.append(h('option',{value:f.id, textContent:f.name}));
+    }
+  }catch{ chips.innerHTML='<span class="muted">Impossible de charger les albums.</span>'; }
+}
+function resetAndLoad(){ offset=0; has_more=true; grid.innerHTML=''; selected.clear(); visibleItems=[]; loadNextPage(true); }
+
+/* ===== MEDIAS ===== */
+async function loadNextPage(){
+  if(loading || !has_more) return; loading=true;
+  try{
+    const url = currentFolder===null ? `/api/media/list?offset=${offset}&limit=${limit}` :
+      `/api/media/list/${currentFolder}?mode=paged&offset=${offset}&limit=${limit}`;
+    const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    const items = Array.isArray(d) ? d.map(x=>({...x,kind:'photos',thumb:x.url})) : d.items;
+    has_more = Array.isArray(d) ? false : d.has_more; offset = Array.isArray(d) ? 0 : (d.next_offset ?? offset);
+    appendCards(items.filter(x => currentType==='all' ? true : x.kind===currentType));
+  }catch(e){
+    if(!grid.children.length) grid.innerHTML='<p class="muted">Erreur de chargement.</p>';
+  }finally{ loading=false; }
+}
+
+function appendCards(items){
+  if(!items.length && !grid.children.length){ grid.append(h('p',{className:'muted'},'Aucune ressource.')); return; }
+  for(const m of items){
+    const card=h('div',{className:`cell type-${m.kind}`}); const media=h('div',{className:'media'}); let el;
+
+    if(m.kind==='videos'){
+      const idx=visibleItems.push(m)-1;
+      let srcThumb = m.thumb;
+      if(isYT(m.url)){ const id=ytId(m.url); srcThumb = id?`https://img.youtube.com/vi/${id}/hqdefault.jpg`:m.thumb; }
+      el=h('img',{src:srcThumb,loading:'lazy',style:'cursor:zoom-in'}); el.onclick=(e)=>{e.stopPropagation();openLightbox(idx);}
+
+    }else if(m.kind==='audio'){
+      el=h('div',{className:'audio-box'}, h('span',{className:'emoji'},'🎵'), h('audio',{src:m.url,controls:true}));
+
+    }else if(m.kind==='documents'){
+      const idx=visibleItems.push(m)-1;
+      const badge = isPDF(m.url) ? 'PDF' : (isOffice(m.url) ? 'Office' : 'Doc');
+      el=h('div',{className:'doc-box',style:'cursor:zoom-in'}, h('span',{className:'emoji'},'📄'), h('span',{className:'doc-badge'},badge));
+      el.onclick=(e)=>{e.stopPropagation();openLightbox(idx);}
+
+    }else{
+      const idx=visibleItems.push(m)-1;
+      el=h('img',{src:m.thumb||m.url,loading:'lazy',onerror(){this.src=m.url;},style:'cursor:zoom-in'});
+      el.onclick=(e)=>{e.stopPropagation();openLightbox(idx);}
+    }
+
+    const overlay=h('div',{className:'sel-overlay',innerHTML:'<input type="checkbox" class="sel-box"> Sélection'});
+    const cb=overlay.querySelector('.sel-box'); cb.onchange=()=>{ cb.checked?selected.add(m.id):selected.delete(m.id); };
+    const del=h('button',{className:'icon-btn',title:'Supprimer',innerHTML:'🗑️'}); del.onclick=async(e)=>{e.stopPropagation(); if(!confirm('Supprimer ?')) return; await fetch(`/api/media/${m.id}`,{method:'DELETE'}); card.remove(); };
+    const meta=h('div',{className:'meta'}, h('span',{className:'tag'},''), del);
+
+    media.append(el); card.append(overlay,media,meta); grid.append(card);
+  }
+}
+
+/* ===== Admin albums ===== */
+document.getElementById('manageToggle').onclick=()=> adminPanel.hidden = !adminPanel.hidden;
+document.getElementById('albumSearch').oninput=()=> loadFolders();
+document.getElementById('albumSort').onchange=()=> loadFolders();
+document.getElementById('renameBtn').onclick=async()=>{
+  const id=rnSel.value, name=rnName.value.trim(); if(!id||!name) return;
+  await fetch('/api/folders/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:Number(id),new_name:name})});
+  rnName.value=''; await loadFolders(); resetAndLoad();
+};
+document.getElementById('mergeBtn').onclick=async()=>{
+  const s=mSrc.value, t=mDst.value; if(!s||!t||s===t) return;
+  await fetch('/api/folders/merge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_id:Number(s),target_id:Number(t)})});
+  await loadFolders(); resetAndLoad();
+};
+
+/* ===== Actions ===== */
+document.getElementById('refreshBtn').onclick=()=> resetAndLoad();
+document.getElementById('selectAllBtn').onclick=()=> document.querySelectorAll('.grid .cell .sel-box').forEach(cb=>{ cb.checked=true; cb.dispatchEvent(new Event('change')); });
+document.getElementById('deleteSelBtn').onclick=async()=>{
+  const ids=[...selected]; if(!ids.length) return; if(!confirm(`Supprimer ${ids.length} média(s) ?`)) return;
+  await fetch('/api/media/bulk',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  resetAndLoad();
+};
+document.getElementById('downloadSelBtn').onclick=()=>{
+  const urls=[]; document.querySelectorAll('.grid .cell').forEach(c=>{
+    const k=c.querySelector('.sel-box'); if(k?.checked){
+      const aud=c.querySelector('audio'); const img=c.querySelector('img');
+      urls.push(aud?.src || img?.src);
+    }
+  });
+  urls.slice(0,10).forEach(u=> window.open(u,'_blank'));
+};
+
+/* ===== Upload ===== */
+fileInputBtn.onchange=()=>{ if(fileInputBtn.files?.length){ hiddenFile.files=fileInputBtn.files; uploadForm.hidden=false; msg.textContent=`Fichier : ${fileInputBtn.files[0].name}`; } };
+uploadForm.onsubmit=async(e)=>{
+  e.preventDefault(); msg.textContent='Envoi…';
+  const fd=new FormData(uploadForm); if(hiddenFile.files?.length) fd.set('image', hiddenFile.files[0]);
+  const r=await fetch('/api/media/upload',{method:'POST',body:fd}); const d=await r.json();
+  if(d.ok){ msg.textContent='✅ Upload réussi'; uploadForm.reset(); uploadForm.hidden=true; fileInputBtn.value=''; await loadFolders(); resetAndLoad(); }
+  else { msg.textContent='❌ '+(d.error||'Erreur'); }
+};
+
+/* ===== Lien YouTube ===== */
+addYT.onclick=async()=>{
+  const url=prompt('Collez l’URL YouTube (https://youtu.be/... ou https://www.youtube.com/watch?v=...)');
+  if(!url) return;
+  const folder_id = folderSelect.value ? Number(folderSelect.value) : null;
+  const new_folder = (!folder_id && newFolderInput.value.trim()) ? newFolderInput.value.trim() : null;
+  const r=await fetch('/api/media/add_youtube',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,folder_id,new_folder})});
+  const d=await r.json();
+  if(d.ok){ await loadFolders(); resetAndLoad(); } else { alert('Lien YouTube invalide.'); }
+};
+
+/* ===== Tabs ===== */
+typeTabs.addEventListener('click',(e)=>{
+  if(!(e.target instanceof HTMLButtonElement)) return;
+  setActiveTab(e.target.dataset.type); resetAndLoad();
+  history.replaceState(null,'',`?tab=${currentType}`);
+});
+
+/* ===== Infinite scroll ===== */
+new IntersectionObserver((es)=>{ if(es[0].isIntersecting) loadNextPage(); }, {rootMargin:"800px"}).observe(sentinel);
+
+/* ===== Lightbox ===== */
+function openLightbox(i){ if(!visibleItems.length)return; lbIndex=Math.max(0,Math.min(i,visibleItems.length-1)); renderLB('office'); lb.classList.add('open'); lb.setAttribute('aria-hidden','false'); }
+function closeLightbox(){ lb.classList.remove('open'); lb.setAttribute('aria-hidden','true'); lbMedia.innerHTML=''; }
+function navLB(d){ lbIndex=(lbIndex+d+visibleItems.length)%visibleItems.length; renderLB('office'); }
+
+function renderLB(pref='office'){
+  const it=visibleItems[lbIndex]; lbMedia.innerHTML=''; lbAltViewer.hidden=true;
+
+  if(it.kind==='videos'){
+    if(isYT(it.url)){
+      const id=ytId(it.url);
+      const fr=document.createElement('iframe');
+      fr.src=`https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
+      fr.allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+      fr.allowFullscreen=true; fr.loading='lazy'; fr.setAttribute('frameborder','0');
+      fr.style.width='100%'; fr.style.height='100%';
+      lbMedia.append(fr);
+      // Fallback UX si embed bloqué
+      const timer=setTimeout(()=>{ if(lbMedia.contains(fr)){ const box=document.createElement('div'); box.style.display='grid'; box.style.placeItems='center'; box.style.height='100%'; box.innerHTML=`<div style="text-align:center"><p>Cette vidéo ne permet pas l’intégration.</p><a class="pill" href="https://www.youtube.com/watch?v=${id}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></div>`; lbMedia.innerHTML=''; lbMedia.append(box); }}, 2000);
+      fr.onload=()=>clearTimeout(timer);
+    }else{
+      const v=document.createElement('video'); v.src=it.url; v.controls=true; v.autoplay=true; v.playsInline=true; v.poster=it.thumb||''; lbMedia.append(v);
+    }
+  }else if(it.kind==='documents'){
+    if(isPDF(it.url)){
+      const fr=document.createElement('iframe'); fr.src=`/preview/${it.id}`; fr.loading='lazy'; fr.setAttribute('frameborder','0'); fr.style.width='100%'; fr.style.height='100%'; lbMedia.append(fr);
+    }else{
+      const office='https://view.officeapps.live.com/op/embed.aspx?src='+encodeURIComponent(it.url);
+      const gdocs ='https://docs.google.com/gview?embedded=1&hl=fr&url='+encodeURIComponent(it.url);
+      const fr=document.createElement('iframe'); fr.src=(pref==='gdocs')?gdocs:office; fr.loading='lazy'; fr.setAttribute('frameborder','0'); fr.style.width='100%'; fr.style.height='100%';
+      lbAltViewer.hidden=false; lbAltViewer.textContent=(pref==='gdocs')?'Visionneuse Office':'Visionneuse Google'; lbAltViewer.onclick=()=>renderLB(pref==='gdocs'?'office':'gdocs');
+      lbMedia.append(fr);
+    }
+  }else{
+    const img=document.createElement('img'); img.src=it.url; img.alt='media'; lbMedia.append(img);
+  }
+  lbCounter.textContent=`${lbIndex+1} / ${visibleItems.length}`;
+  lbOpen.href=it.url; lbDownload.href=it.url;
+}
+lbPrev.onclick=()=>navLB(-1); lbNext.onclick=()=>navLB(1);
+lbClose.onclick=(e)=>{e.stopPropagation(); closeLightbox();}; lbBackdrop.onclick=closeLightbox;
+window.addEventListener('keydown',(e)=>{ if(lb.classList.contains('open')){ if(e.key==='Escape')closeLightbox(); if(e.key==='ArrowRight')navLB(1); if(e.key==='ArrowLeft')navLB(-1); }});
+
+/* Init */
+setActiveTab(currentType);
+loadFolders().then(()=> resetAndLoad());
+</script>
+
+<style>
+.doc-box{display:flex;align-items:center;gap:.5rem;padding:.75rem;border-radius:.6rem;background:rgba(255,255,255,.06);backdrop-filter:blur(2px)}
+.doc-badge{font-size:.8rem;opacity:.85}
+.lb-media iframe{width:100%;height:100%}
+</style>
+{% endblock %}
