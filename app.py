@@ -107,6 +107,15 @@ def create_app() -> Flask:
     def gallery():
         return render_template("gallery.html")
 
+    # Route de debug optionnelle pour vérifier la DB utilisée
+    @app.route("/__db")
+    def __db():
+        url_str = db.engine.url.render_as_string(hide_password=True)
+        with db.engine.connect() as c:
+            f = c.execute(text("select count(*) from folder")).scalar_one()
+            m = c.execute(text("select count(*) from media")).scalar_one()
+        return {"url": url_str, "folder_count": f, "media_count": m}, 200
+
     # Preview proxy
     @app.route("/preview/<int:media_id>")
     def preview(media_id: int):
