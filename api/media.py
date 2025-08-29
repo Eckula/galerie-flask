@@ -1,4 +1,3 @@
-# api/media.py  ───────────────────────────────────────────────────────────────
 # api/media.py
 import os, re
 from flask import Blueprint, request, jsonify
@@ -22,7 +21,9 @@ BASE_FOLDER = os.getenv("CLOUDINARY_FOLDER", "galerie-flask")
 media_bp = Blueprint("media", __name__)
 
 AUDIO_EXT = {"mp3","wav","m4a","aac","ogg","oga","flac"}
-DOC_EXT   = {"pdf","doc","docx","ppt","pptx","xls","xlsx","txt","csv"}
+DOC_EXT   = {"pdf","doc","docx","ppt","pptx","xls","xlsx","odt","ods","odp","txt","csv"}
+VID_EXT   = {"mp4","webm","ogg","mov","m4v","3gp","mkv"}
+IMG_EXT   = {"jpg","jpeg","png","gif","webp","bmp","svg","heic","heif","avif"}
 _YT_RE    = re.compile(r"(?:youtu\.be/|youtube\.com/(?:watch\?v=|embed/|shorts/))([A-Za-z0-9_-]{6,})")
 
 def _is_youtube(url:str)->bool:
@@ -33,19 +34,41 @@ def _yt_id(url:str)->str|None:
     m=_YT_RE.search(url or "")
     return m.group(1) if m else None
 
+def _ext_from_url(url:str)->str:
+    u=(url or "").split("?")[0].lower()
+    m=re.search(r"\.([a-z0-9]{2,5})$", u)
+    return (m.group(1) if m else "") or ""
+
 def _guess_kind_from_url(url: str):
+    """
+    Classement robuste même si l’URL n’a pas d’extension.
+    On s’appuie sur les segments Cloudinary:
+      /image/upload/ → photos
+      /video/upload/ → vidéos
+      /raw/upload/   → documents
+    """
     u=(url or "").lower()
-    if _is_youtube(u): return ("videos","yt")
-    m=re.search(r"\.([a-z0-9]{2,5})(?:\?|$)",u); ext=m.group(1) if m else ""
-    if ext in AUDIO_EXT: return ("audio", ext)
-    if ext in DOC_EXT: return ("documents", ext)
-    if "/video/upload/" in u: return ("videos", ext or "mp4")
-    return ("photos", ext or "jpg")
+    if _is_youtube(u):                   return ("videos","yt")
+
+    ext=_ext_from_url(u)
+    if ext in IMG_EXT:                   return ("photos",    ext)
+    if ext in VID_EXT:                   return ("videos",    ext)
+    if ext in AUDIO_EXT:                 return ("audio",     ext)
+    if ext in DOC_EXT:                   return ("documents", ext)
+
+    # Détection par chemin Cloudinary
+    if "/raw/upload/"   in u:            return ("documents", ext or "")
+    if "/video/upload/" in u:            return ("videos",    ext or "mp4")
+    if "/image/upload/" in u:            return ("photos",    ext or "jpg")
+
+    # Par défaut on range dans documents (plus sûr que "photos")
+    return ("documents", ext or "")
 
 def _thumb_url(public_id: str, kind: str, url:str) -> str:
     if kind=="videos":
         if _is_youtube(url):
-            vid=_yt_id(url); return f"https://img.youtube.com/vi/{vid}/hqdefault.jpg" if vid else ""
+            vid=_yt_id(url)
+            return f"https://img.youtube.com/vi/{vid}/hqdefault.jpg" if vid else ""
         u,_=cloudinary_url(public_id, resource_type="video", type="upload", format="jpg",
                            transformation=[{"width":480,"height":320,"crop":"fill","gravity":"auto",
                                             "quality":"auto","fetch_format":"auto","start_offset":"auto"}])
@@ -59,8 +82,15 @@ def _thumb_url(public_id: str, kind: str, url:str) -> str:
 
 def _serialize(m: Media):
     kind, ext = _guess_kind_from_url(m.url)
-    return {"id":m.id,"url":m.url,"public_id":m.public_id,"folder_id":m.folder_id,
-            "kind":kind,"ext":ext,"thumb":_thumb_url(m.public_id, kind, m.url)}
+    return {
+        "id": m.id,
+        "url": m.url,
+        "public_id": m.public_id,
+        "folder_id": m.folder_id,
+        "kind": kind,
+        "ext": ext,
+        "thumb": _thumb_url(m.public_id, kind, m.url)
+    }
 
 # ─── LIST ────────────────────────────────────────────────────────────────────
 @media_bp.get("/list/<int:folder_id>")
@@ -72,6 +102,7 @@ def list_by_folder(folder_id):
     total = q.count(); rows = q.offset(offset).limit(limit).all()
     items = [_serialize(m) for m in rows]
     if not paged:
+        # compat: ancienne route renvoyait un tableau basique
         return jsonify([{"id":x["id"],"url":x["url"],"public_id":x["public_id"]} for x in items])
     next_off = offset + limit
     return jsonify({"items": items, "has_more": next_off < total,
@@ -110,8 +141,13 @@ def upload():
             folder = Folder(name="General"); db.session.add(folder); db.session.commit()
 
     try:
-        res = cloudinary.uploader.upload(file, folder=f"{BASE_FOLDER}/{folder.name}",
-                                         resource_type="auto", overwrite=False, invalidate=True)
+        res = cloudinary.uploader.upload(
+            file,
+            folder=f"{BASE_FOLDER}/{folder.name}",
+            resource_type="auto",
+            overwrite=False,
+            invalidate=True
+        )
         media = Media(folder_id=folder.id, public_id=res["public_id"], url=res["secure_url"])
         db.session.add(media); db.session.commit()
         return jsonify({"ok": True, "media": _serialize(media)}), 201
@@ -177,4 +213,3 @@ def bulk_delete():
         db.session.delete(m)
     db.session.commit()
     return jsonify({"ok": True, "deleted": [m.id for m in rows]})
-
