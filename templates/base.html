@@ -1,10 +1,10 @@
-<!-- templates/base.html  ─────────────────────────────────────────────────── -->
+<!-- templates/base.html -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{% block title %}Famille XXXX{% endblock %}</title>
+  <title>{% block title %}Famille Ledain{% endblock %}</title>
   <link rel="preload" href="{{ url_for('static', filename='video/family-bg.mp4') }}" as="video" type="video/mp4">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
   <style>
@@ -23,7 +23,7 @@
   <div class="overlay"></div>
 
   <header class="topbar">
-    <div class="brand"><a href="{{ url_for('home') }}">Famille XXXX</a> — <span class="section">{% block section %}{% endblock %}</span></div>
+    <div class="brand"><a href="{{ url_for('home') }}">Famille Ledain</a> — <span class="section">{% block section %}{% endblock %}</span></div>
     <nav class="topnav">
       <a href="{{ url_for('gallery') }}">Galerie</a>
       <a href="{{ url_for('gallery') }}?tab=photos">Photos</a>

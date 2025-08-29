@@ -1,6 +1,6 @@
-<!-- templates/gallery.html  ─────────────────────────────────────────────── -->
+<!-- templates/gallery.html -->
 {% extends "base.html" %}
-{% block title %}Famille XXXX — Galerie{% endblock %}
+{% block title %}Famille Ledain — Galerie{% endblock %}
 {% block section %}Galerie{% endblock %}
 
 {% block content %}
@@ -48,15 +48,20 @@
     <button id="selectAllBtn" class="pill">Tout sélectionner (vue)</button>
     <button id="deleteSelBtn" class="pill">Supprimer sélection</button>
     <button id="downloadSelBtn" class="pill">Télécharger (vue)</button>
+
+    <!-- MULTI-FICHIERS -->
     <label class="pill btn-file"><span>+ Ajouter des médias</span>
-      <input id="fileInput" type="file" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
+      <input id="fileInput" type="file" multiple
+             accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
     </label>
     <button id="addYT" class="pill">+ Lien YouTube</button>
   </div>
 </div>
 
 <form id="uploadForm" action="/api/media/upload" method="post" enctype="multipart/form-data" class="upload-panel" hidden>
-  <input type="file" name="image" id="uploadFileHidden" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" required hidden>
+  <!-- MULTI-FICHIERS (on boucle en JS, backend inchangé: clé 'image') -->
+  <input type="file" name="image" id="uploadFileHidden" multiple
+         accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" required hidden>
   <div class="row">
     <label>Album existant : <select name="folder_id" id="folderSelect"><option value="">— Choisir —</option></select></label>
     <span>ou</span>
@@ -89,6 +94,8 @@
 </div>
 
 <script>
+/* ----- (code identique au tien sauf la partie UPLOAD multi) ----- */
+
 const grid=document.getElementById('grid'), chips=document.getElementById('albumChips');
 const folderSelect=document.getElementById('folderSelect'), uploadForm=document.getElementById('uploadForm');
 const fileInputBtn=document.getElementById('fileInput'), hiddenFile=document.getElementById('uploadFileHidden'), msg=document.getElementById('msg');
@@ -229,18 +236,40 @@ document.getElementById('downloadSelBtn').onclick=()=>{
   urls.slice(0,10).forEach(u=> window.open(u,'_blank'));
 };
 
-/* ===== Upload ===== */
-fileInputBtn.onchange=()=>{ if(fileInputBtn.files?.length){ hiddenFile.files=fileInputBtn.files; uploadForm.hidden=false; msg.textContent=`Fichier : ${fileInputBtn.files[0].name}`; } };
+/* ===== Upload MULTI ===== */
+fileInputBtn.onchange=()=>{
+  if(fileInputBtn.files?.length){
+    hiddenFile.files=fileInputBtn.files; 
+    uploadForm.hidden=false;
+    msg.textContent = `${hiddenFile.files.length} fichier(s) sélectionné(s)`;
+  }
+};
+
 uploadForm.onsubmit=async(e)=>{
-  e.preventDefault(); msg.textContent='Envoi…';
-  const fd=new FormData(uploadForm); if(hiddenFile.files?.length) fd.set('image', hiddenFile.files[0]);
-  const r=await fetch('/api/media/upload',{method:'POST',body:fd}); const d=await r.json();
-  if(d.ok){ msg.textContent='✅ Upload réussi'; uploadForm.reset(); uploadForm.hidden=true; fileInputBtn.value=''; await loadFolders(); resetAndLoad(); }
-  else { msg.textContent='❌ '+(d.error||'Erreur'); }
+  e.preventDefault();
+  const files=[...hiddenFile.files||[]];
+  if(!files.length){ msg.textContent='Choisissez des fichiers'; return; }
+
+  let ok=0, ko=0;
+  for(const f of files){
+    const fd=new FormData(uploadForm);
+    fd.set('image', f); // le backend attend "image"
+    try{
+      const r=await fetch('/api/media/upload',{method:'POST',body:fd});
+      const d=await r.json();
+      d.ok ? ok++ : ko++;
+    }catch{ ko++; }
+    msg.textContent=`Téléversés: ${ok}/${files.length} — échecs: ${ko}`;
+  }
+
+  // Reset
+  uploadForm.reset(); fileInputBtn.value=''; hiddenFile.value='';
+  uploadForm.hidden=true; 
+  await loadFolders(); resetAndLoad();
 };
 
 /* ===== Lien YouTube ===== */
-addYT.onclick=async()=>{
+document.getElementById('addYT').onclick=async()=>{
   const url=prompt('Collez l’URL YouTube (https://youtu.be/... ou https://www.youtube.com/watch?v=...)');
   if(!url) return;
   const folder_id = folderSelect.value ? Number(folderSelect.value) : null;
@@ -250,23 +279,22 @@ addYT.onclick=async()=>{
   if(d.ok){ await loadFolders(); resetAndLoad(); } else { alert('Lien YouTube invalide.'); }
 };
 
-/* ===== Tabs ===== */
+/* ===== Tabs / Infinite / Lightbox : inchangé ===== */
 typeTabs.addEventListener('click',(e)=>{
   if(!(e.target instanceof HTMLButtonElement)) return;
   setActiveTab(e.target.dataset.type); resetAndLoad();
   history.replaceState(null,'',`?tab=${currentType}`);
 });
-
-/* ===== Infinite scroll ===== */
 new IntersectionObserver((es)=>{ if(es[0].isIntersecting) loadNextPage(); }, {rootMargin:"800px"}).observe(sentinel);
 
-/* ===== Lightbox ===== */
+/* Lightbox helpers ... (inchangé) */
 function openLightbox(i){ if(!visibleItems.length)return; lbIndex=Math.max(0,Math.min(i,visibleItems.length-1)); renderLB('office'); lb.classList.add('open'); lb.setAttribute('aria-hidden','false'); }
 function closeLightbox(){ lb.classList.remove('open'); lb.setAttribute('aria-hidden','true'); lbMedia.innerHTML=''; }
 function navLB(d){ lbIndex=(lbIndex+d+visibleItems.length)%visibleItems.length; renderLB('office'); }
-
 function renderLB(pref='office'){
   const it=visibleItems[lbIndex]; lbMedia.innerHTML=''; lbAltViewer.hidden=true;
+  const isPDF=u=>/\.pdf($|\?)/i.test(u||''); const isOffice=u=>/\.(docx?|pptx?|xlsx?)($|\?)/i.test(u||'');
+  const isYT=u=>(/youtu\.be|youtube\.com/i.test(u||'')); const ytId=u=>{const m=(u||'').match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{6,})/);return m?m[1]:null;};
 
   if(it.kind==='videos'){
     if(isYT(it.url)){
@@ -277,7 +305,6 @@ function renderLB(pref='office'){
       fr.allowFullscreen=true; fr.loading='lazy'; fr.setAttribute('frameborder','0');
       fr.style.width='100%'; fr.style.height='100%';
       lbMedia.append(fr);
-      // Fallback UX si embed bloqué
       const timer=setTimeout(()=>{ if(lbMedia.contains(fr)){ const box=document.createElement('div'); box.style.display='grid'; box.style.placeItems='center'; box.style.height='100%'; box.innerHTML=`<div style="text-align:center"><p>Cette vidéo ne permet pas l’intégration.</p><a class="pill" href="https://www.youtube.com/watch?v=${id}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></div>`; lbMedia.innerHTML=''; lbMedia.append(box); }}, 2000);
       fr.onload=()=>clearTimeout(timer);
     }else{
@@ -309,6 +336,7 @@ loadFolders().then(()=> resetAndLoad());
 </script>
 
 <style>
+/* Compléments de styles */
 .doc-box{display:flex;align-items:center;gap:.5rem;padding:.75rem;border-radius:.6rem;background:rgba(255,255,255,.06);backdrop-filter:blur(2px)}
 .doc-badge{font-size:.8rem;opacity:.85}
 .lb-media iframe{width:100%;height:100%}
