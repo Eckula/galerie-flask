@@ -1,3 +1,4 @@
+# app.py — Flask + SQLAlchemy (pool Neon robuste)
 from __future__ import annotations
 import os, sys, time, re, mimetypes
 from urllib.parse import urlparse
@@ -14,6 +15,7 @@ from extensions import db, migrate
 def _normalize_db_url(uri: str) -> str:
     if not uri:
         return uri
+    # compat Heroku-style
     if uri.startswith("postgres://"):
         uri = "postgresql://" + uri[len("postgres://"):]
     return uri
@@ -23,6 +25,7 @@ def _choose_db_uri(app: Flask) -> str:
     env_uri = os.getenv("DATABASE_URL") or os.getenv("SQLALCHEMY_DATABASE_URI")
     if env_uri:
         return _normalize_db_url(env_uri)
+    # fallback SQLite local pour le dev
     os.makedirs(app.instance_path, exist_ok=True)
     sqlite_path = os.path.join(app.instance_path, "gallery.db").replace("\\", "/")
     return f"sqlite:///{sqlite_path}"
@@ -31,18 +34,24 @@ def _choose_db_uri(app: Flask) -> str:
 def create_app() -> Flask:
     load_dotenv()
 
-    app = Flask(
-        __name__,
-        instance_relative_config=True,
-        static_folder="static",
-        template_folder="templates",
-    )
+    app = Flask(__name__, instance_relative_config=True,
+                static_folder="static", template_folder="templates")
 
-    # --- Base de données (ENV d'abord, sinon SQLite local)
+    # --- Base de données (ENV d'abord, sinon SQLite)
     db_uri = _choose_db_uri(app)
     app.config["SQLALCHEMY_DATABASE_URI"] = db_uri
 
-    # Log de l'URI (mot de passe masqué)
+    # POOL ROBUSTE pour Neon (évite SSL SYSCALL EOF)
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_pre_ping": True,                         # teste la connexion avant chaque requête
+        "pool_recycle": 280,                           # recycle < 300s (timeouts pooler)
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "5")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "10")),
+        "pool_timeout": 30,
+        "connect_args": {"sslmode": "require", "connect_timeout": 10},
+    }
+
+    # Log de l’URI (mdp masqué)
     try:
         url = make_url(db_uri)
         app.logger.info("DB -> %s", url.render_as_string(hide_password=True))
@@ -52,12 +61,12 @@ def create_app() -> Flask:
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecret")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+    # cache-busting /static
     if app.debug:
         app.config["TEMPLATES_AUTO_RELOAD"] = True
         app.jinja_env.auto_reload = True
         app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
-    # cache-busting /static
     @app.context_processor
     def override_url_for():
         def dated_url_for(endpoint, **values):
@@ -72,26 +81,22 @@ def create_app() -> Flask:
     db.init_app(app)
     migrate.init_app(app, db)
 
-    # Création tables + auto-patch (SQLite uniquement)
+    # Création tables si SQLite + warm-up DB (ne plante pas si KO)
     with app.app_context():
-        from models import Media, Folder  # noqa: F401
-        db.create_all()
+        from models import Media, Folder  # noqa
         try:
             if db.engine.url.get_backend_name() == "sqlite":
-                with db.engine.begin() as conn:
-                    def has_col(table: str, col: str) -> bool:
-                        rows = conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
-                        return any(r[1] == col for r in rows)
-                    if not has_col("media", "created_at"):
-                        conn.execute(text('ALTER TABLE "media" ADD COLUMN "created_at" TEXT'))
-                    if not has_col("folder", "created_at"):
-                        conn.execute(text('ALTER TABLE "folder" ADD COLUMN "created_at" TEXT'))
-                    if not has_col("folder", "pinned"):
-                        conn.execute(text('ALTER TABLE "folder" ADD COLUMN "pinned" INTEGER DEFAULT 0'))
+                db.create_all()
+            db.session.execute(text("select 1"))
         except Exception as e:
-            app.logger.warning("Auto-patch schema skipped: %s", e)
+            app.logger.warning("DB warmup failed: %s", e)
 
-    # Blueprints
+    # Teardown: ferme proprement la session à chaque requête
+    @app.teardown_appcontext
+    def _shutdown_session(exc=None):
+        db.session.remove()
+
+    # Blueprints API
     from api.media import media_bp
     from api.folders import folders_bp
     app.register_blueprint(media_bp,   url_prefix="/api/media")
@@ -107,16 +112,18 @@ def create_app() -> Flask:
     def gallery():
         return render_template("gallery.html")
 
-    # Route de debug pour vérifier la DB utilisée (à retirer après)
+    # Route debug (peut être supprimée après vérif)
     @app.route("/__db")
     def __db():
         url_str = db.engine.url.render_as_string(hide_password=True)
-        with db.engine.connect() as c:
-            f = c.execute(text("select count(*) from folder")).scalar_one()
-            m = c.execute(text("select count(*) from media")).scalar_one()
+        try:
+            f = db.session.execute(text("select count(*) from folder")).scalar_one()
+            m = db.session.execute(text("select count(*) from media")).scalar_one()
+        except Exception as e:
+            return {"url": url_str, "error": str(e)}, 500
         return {"url": url_str, "folder_count": f, "media_count": m}, 200
 
-    # Preview proxy
+    # Proxy /preview/<id> (PDF/Docs)
     @app.route("/preview/<int:media_id>")
     def preview(media_id: int):
         from models import Media
@@ -131,7 +138,7 @@ def create_app() -> Flask:
             return mt or "application/octet-stream"
 
         ses = requests.Session()
-        headers = {"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"}
 
         try:
             h = ses.head(url, headers=headers, allow_redirects=True, timeout=8)
@@ -142,7 +149,8 @@ def create_app() -> Flask:
 
             def generate():
                 for chunk in r.iter_content(64 * 1024):
-                    if chunk: yield chunk
+                    if chunk:
+                        yield chunk
 
             resp = Response(generate(), mimetype=mime)
             resp.headers["Content-Disposition"] = f'inline; filename="{name}"'
@@ -158,9 +166,8 @@ def create_app() -> Flask:
 </body></html>"""
             return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
-    # alias utile si appelé via 'python app.py'
+    # alias utile si "python app.py"
     sys.modules.setdefault("app", sys.modules[__name__])
-
     return app
 
 

@@ -1,4 +1,4 @@
-/* static/css/main.css — v5 (responsive mobile OK) */
+/* static/css/main.css — v7 (responsive + swipe overlay + flèches visibles) */
 
 /* ===== Reset & base ===== */
 * { box-sizing: border-box }
@@ -55,18 +55,14 @@ body {
   gap: 12px;
   margin: 0;
 }
-@media (min-width: 600px) {
-  .cards-hero { grid-template-columns: repeat(2, 1fr); }
-}
-@media (min-width: 1024px) {
-  .cards-hero { grid-template-columns: repeat(3, 1fr); }
-}
+@media (min-width: 600px) { .cards-hero { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1024px){ .cards-hero { grid-template-columns: repeat(3, 1fr); } }
 
 /* Carte individuelle (ratio stable) */
 .card-hero {
   position: relative;
   display: block;
-  aspect-ratio: 16/9;          /* évite le débordement vertical */
+  aspect-ratio: 16/9;
   min-height: 160px;
   border-radius: 14px;
   overflow: hidden;
@@ -135,13 +131,43 @@ img, video { max-width: 100%; height: auto; display:block; }
 .lightbox{position:fixed;inset:0;display:none;z-index:80}
 .lightbox.open{display:block}
 .lb-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.78);backdrop-filter:blur(4px);cursor:zoom-out}
-.lb-content{position:absolute;inset:4% 5%;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.28);display:flex;align-items:center;justify-content:center}
-.lb-top{position:absolute;top:8px;left:12px;right:12px;display:flex;align-items:center;justify-content:space-between;gap:.5rem;pointer-events:none}
+.lb-content{position:absolute;inset:4% 5%;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.28);display:flex;align-items:center;justify-content:center;overflow:hidden}
+
+/* couche média (dessous) */
+.lb-media{max-width:100%;max-height:100%;display:flex;align-items:center;justify-content:center;padding:3.5rem 3rem 2.5rem}
+.lb-media img,.lb-media video,.lb-media iframe{max-width:92vw;max-height:82vh;object-fit:contain;border-radius:8px;background:#000}
+
+/* couche geste (au-dessus du média, sous les boutons) */
+.lb-gesture{
+  position:absolute; inset:0; z-index:2;
+  background: transparent; /* invisible */
+  touch-action: none;       /* on gère tous les gestes */
+}
+
+/* barres & boutons (au-dessus de la gesture) */
+.lb-top{position:absolute;top:8px;left:12px;right:12px;display:flex;align-items:center;justify-content:space-between;gap:.5rem;pointer-events:none; z-index:3}
 .lb-actions .pill{margin-left:.4rem;pointer-events:auto}
 .lb-close{position:absolute;top:8px;left:8px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:10px;padding:.25rem .5rem;cursor:pointer;z-index:3}
 .lb-close:hover{background:rgba(255,255,255,.22)}
-.lb-media{max-width:100%;max-height:100%;display:flex;align-items:center;justify-content:center;padding:3.5rem 3rem 2.5rem}
-.lb-media img,.lb-media video,.lb-media iframe{max-width:92vw;max-height:82vh;object-fit:contain;border-radius:8px;background:#000}
-.lb-prev,.lb-next{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);color:#fff;border-radius:999px;width:46px;height:46px;cursor:pointer;z-index:3}
+
+/* Flèches renforcées (bien visibles sur mobile) */
+.lb-prev,.lb-next{
+  position:absolute;top:50%;transform:translateY(-50%);
+  background:#fff; color:#111; border:none;
+  border-radius:999px; width:64px; height:64px; cursor:pointer; z-index:3;
+  box-shadow:0 10px 26px rgba(0,0,0,.55);
+  font-size:28px; line-height:1;
+  display:flex; align-items:center; justify-content:center;
+  opacity:.98; transition: transform .15s ease;
+}
 .lb-prev{left:16px} .lb-next{right:16px}
-.lb-prev:hover,.lb-next:hover{background:rgba(255,255,255,.24)}
+.lb-prev:hover,.lb-next:hover{ transform:translateY(-50%) scale(1.06); }
+@media (max-width: 640px){
+  .lb-prev,.lb-next{ width:68px; height:68px; font-size:30px; }
+}
+
+/* Anim swipe */
+@keyframes lbSwipeLeft { from{ transform:translateX(40px); opacity:.9 } to{ transform:none; opacity:1 } }
+@keyframes lbSwipeRight{ from{ transform:translateX(-40px); opacity:.9 } to{ transform:none; opacity:1 } }
+.lb-media.swipe-left{ animation: lbSwipeLeft .18s ease }
+.lb-media.swipe-right{ animation: lbSwipeRight .18s ease }

@@ -59,7 +59,7 @@
 </div>
 
 <form id="uploadForm" action="/api/media/upload" method="post" enctype="multipart/form-data" class="upload-panel" hidden>
-  <!-- MULTI-FICHIERS (on boucle en JS, backend inchangé: clé 'image') -->
+  <!-- MULTI-FICHIERS: on boucle côté JS, backend inchangé ('image') -->
   <input type="file" name="image" id="uploadFileHidden" multiple
          accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" required hidden>
   <div class="row">
@@ -77,7 +77,7 @@
 <!-- Lightbox -->
 <div id="lightbox" class="lightbox" aria-hidden="true">
   <div class="lb-backdrop" id="lbBackdrop"></div>
-  <div class="lb-content">
+  <div class="lb-content" id="lbContent">
     <button class="lb-close" id="lbClose" aria-label="Fermer">✕</button>
     <div class="lb-top">
       <div id="lbCounter" class="pill">—/—</div>
@@ -88,14 +88,16 @@
       </div>
     </div>
     <div class="lb-media" id="lbMedia"></div>
+    <!-- Couche GESTE (capte les swipes même au-dessus d'un iframe) -->
+    <div class="lb-gesture" id="lbGesture"></div>
+
     <button class="lb-prev" id="lbPrev" aria-label="Précédent">←</button>
     <button class="lb-next" id="lbNext" aria-label="Suivant">→</button>
   </div>
 </div>
 
 <script>
-/* ----- (code identique au tien sauf la partie UPLOAD multi) ----- */
-
+/* ====== State & helpers ====== */
 const grid=document.getElementById('grid'), chips=document.getElementById('albumChips');
 const folderSelect=document.getElementById('folderSelect'), uploadForm=document.getElementById('uploadForm');
 const fileInputBtn=document.getElementById('fileInput'), hiddenFile=document.getElementById('uploadFileHidden'), msg=document.getElementById('msg');
@@ -110,7 +112,8 @@ const lb=document.getElementById('lightbox'), lbMedia=document.getElementById('l
       lbPrev=document.getElementById('lbPrev'), lbNext=document.getElementById('lbNext'),
       lbClose=document.getElementById('lbClose'), lbCounter=document.getElementById('lbCounter'),
       lbOpen=document.getElementById('lbOpen'), lbDownload=document.getElementById('lbDownload'),
-      lbBackdrop=document.getElementById('lbBackdrop'), lbAltViewer=document.getElementById('lbAltViewer');
+      lbBackdrop=document.getElementById('lbBackdrop'), lbAltViewer=document.getElementById('lbAltViewer'),
+      lbGesture=document.getElementById('lbGesture');
 
 let currentFolder=null;
 let currentType=(new URLSearchParams(location.search).get('tab')||'all').toLowerCase();
@@ -126,7 +129,7 @@ const ytId=u=>{const m=(u||'').match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-
 function h(t,p={},...c){const e=document.createElement(t);Object.assign(e,p);for(const x of c){e.append(x?.nodeType?x:document.createTextNode(x))}return e;}
 function setActiveTab(t){currentType=t; document.querySelectorAll('#typeTabs .tab').forEach(b=>b.classList.toggle('active', b.dataset.type===t));}
 
-/* ===== ALBUMS ===== */
+/* ===== Albums ===== */
 async function loadFolders(){
   try{
     const q=new URLSearchParams(); q.set('sort', sortEl.value); if(searchEl.value.trim()) q.set('q', searchEl.value.trim());
@@ -152,7 +155,7 @@ async function loadFolders(){
 }
 function resetAndLoad(){ offset=0; has_more=true; grid.innerHTML=''; selected.clear(); visibleItems=[]; loadNextPage(true); }
 
-/* ===== MEDIAS ===== */
+/* ===== Médias ===== */
 async function loadNextPage(){
   if(loading || !has_more) return; loading=true;
   try{
@@ -244,7 +247,6 @@ fileInputBtn.onchange=()=>{
     msg.textContent = `${hiddenFile.files.length} fichier(s) sélectionné(s)`;
   }
 };
-
 uploadForm.onsubmit=async(e)=>{
   e.preventDefault();
   const files=[...hiddenFile.files||[]];
@@ -253,7 +255,7 @@ uploadForm.onsubmit=async(e)=>{
   let ok=0, ko=0;
   for(const f of files){
     const fd=new FormData(uploadForm);
-    fd.set('image', f); // le backend attend "image"
+    fd.set('image', f);
     try{
       const r=await fetch('/api/media/upload',{method:'POST',body:fd});
       const d=await r.json();
@@ -261,15 +263,13 @@ uploadForm.onsubmit=async(e)=>{
     }catch{ ko++; }
     msg.textContent=`Téléversés: ${ok}/${files.length} — échecs: ${ko}`;
   }
-
-  // Reset
   uploadForm.reset(); fileInputBtn.value=''; hiddenFile.value='';
   uploadForm.hidden=true; 
   await loadFolders(); resetAndLoad();
 };
 
 /* ===== Lien YouTube ===== */
-document.getElementById('addYT').onclick=async()=>{
+addYT.onclick=async()=>{
   const url=prompt('Collez l’URL YouTube (https://youtu.be/... ou https://www.youtube.com/watch?v=...)');
   if(!url) return;
   const folder_id = folderSelect.value ? Number(folderSelect.value) : null;
@@ -279,7 +279,7 @@ document.getElementById('addYT').onclick=async()=>{
   if(d.ok){ await loadFolders(); resetAndLoad(); } else { alert('Lien YouTube invalide.'); }
 };
 
-/* ===== Tabs / Infinite / Lightbox : inchangé ===== */
+/* ===== Tabs / Infinite scroll ===== */
 typeTabs.addEventListener('click',(e)=>{
   if(!(e.target instanceof HTMLButtonElement)) return;
   setActiveTab(e.target.dataset.type); resetAndLoad();
@@ -287,14 +287,16 @@ typeTabs.addEventListener('click',(e)=>{
 });
 new IntersectionObserver((es)=>{ if(es[0].isIntersecting) loadNextPage(); }, {rootMargin:"800px"}).observe(sentinel);
 
-/* Lightbox helpers ... (inchangé) */
+/* ===== Lightbox + SWIPE ===== */
 function openLightbox(i){ if(!visibleItems.length)return; lbIndex=Math.max(0,Math.min(i,visibleItems.length-1)); renderLB('office'); lb.classList.add('open'); lb.setAttribute('aria-hidden','false'); }
 function closeLightbox(){ lb.classList.remove('open'); lb.setAttribute('aria-hidden','true'); lbMedia.innerHTML=''; }
-function navLB(d){ lbIndex=(lbIndex+d+visibleItems.length)%visibleItems.length; renderLB('office'); }
+function navLB(d, anim=true){
+  lbIndex=(lbIndex+d+visibleItems.length)%visibleItems.length;
+  renderLB('office');
+  if(anim){ lbMedia.classList.add(d>0?'swipe-left':'swipe-right'); setTimeout(()=>lbMedia.classList.remove('swipe-left','swipe-right'), 200); }
+}
 function renderLB(pref='office'){
   const it=visibleItems[lbIndex]; lbMedia.innerHTML=''; lbAltViewer.hidden=true;
-  const isPDF=u=>/\.pdf($|\?)/i.test(u||''); const isOffice=u=>/\.(docx?|pptx?|xlsx?)($|\?)/i.test(u||'');
-  const isYT=u=>(/youtu\.be|youtube\.com/i.test(u||'')); const ytId=u=>{const m=(u||'').match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{6,})/);return m?m[1]:null;};
 
   if(it.kind==='videos'){
     if(isYT(it.url)){
@@ -311,6 +313,7 @@ function renderLB(pref='office'){
       const v=document.createElement('video'); v.src=it.url; v.controls=true; v.autoplay=true; v.playsInline=true; v.poster=it.thumb||''; lbMedia.append(v);
     }
   }else if(it.kind==='documents'){
+    const isPDF=u=>/\.pdf($|\?)/i.test(u||''); const isOffice=u=>/\.(docx?|pptx?|xlsx?)($|\?)/i.test(u||'');
     if(isPDF(it.url)){
       const fr=document.createElement('iframe'); fr.src=`/preview/${it.id}`; fr.loading='lazy'; fr.setAttribute('frameborder','0'); fr.style.width='100%'; fr.style.height='100%'; lbMedia.append(fr);
     }else{
@@ -326,17 +329,48 @@ function renderLB(pref='office'){
   lbCounter.textContent=`${lbIndex+1} / ${visibleItems.length}`;
   lbOpen.href=it.url; lbDownload.href=it.url;
 }
-lbPrev.onclick=()=>navLB(-1); lbNext.onclick=()=>navLB(1);
-lbClose.onclick=(e)=>{e.stopPropagation(); closeLightbox();}; lbBackdrop.onclick=closeLightbox;
+lbPrev.onclick=()=>navLB(-1);
+lbNext.onclick=()=>navLB(1);
+lbClose.onclick=(e)=>{e.stopPropagation(); closeLightbox();};
+lbBackdrop.onclick=closeLightbox;
 window.addEventListener('keydown',(e)=>{ if(lb.classList.contains('open')){ if(e.key==='Escape')closeLightbox(); if(e.key==='ArrowRight')navLB(1); if(e.key==='ArrowLeft')navLB(-1); }});
 
-/* Init */
-setActiveTab(currentType);
-loadFolders().then(()=> resetAndLoad());
+/* Swipe tactile via couche 'lb-gesture' (marche aussi sur iframe) */
+(function enableSwipe(){
+  const area = lbGesture; let startX=0, startY=0, tracking=false, pid=null;
+  const abs = Math.abs, TH = Math.max(35, innerWidth*0.10);   // seuil un peu plus souple
+
+  area.addEventListener('pointerdown', (e)=>{
+    tracking = true; pid = e.pointerId; startX = e.clientX; startY = e.clientY;
+    try{ area.setPointerCapture(pid); }catch{}
+  }, {passive:true});
+
+  area.addEventListener('pointermove', (e)=>{
+    if(!tracking || e.pointerId!==pid) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    // horizontal => on empêche le scroll
+    if(abs(dx) > abs(dy) && abs(dx) > 12){ e.preventDefault(); }
+  }, {passive:false});
+
+  area.addEventListener('pointerup', (e)=>{
+    if(!tracking || e.pointerId!==pid) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    tracking = false; pid = null;
+
+    if(Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > TH){
+      navLB(dx>0 ? -1 : 1);
+    }else if(Math.abs(dx) < 8 && Math.abs(dy) < 8){
+      // TAP : on “relaye” le clic à l’élément dessous (ex: play vidéo)
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if(el && el !== area) el.click?.();
+    }
+  }, {passive:true});
+
+  area.addEventListener('pointercancel', ()=>{ tracking=false; pid=null; }, {passive:true});
+})();
 </script>
 
 <style>
-/* Compléments de styles */
 .doc-box{display:flex;align-items:center;gap:.5rem;padding:.75rem;border-radius:.6rem;background:rgba(255,255,255,.06);backdrop-filter:blur(2px)}
 .doc-badge{font-size:.8rem;opacity:.85}
 .lb-media iframe{width:100%;height:100%}
