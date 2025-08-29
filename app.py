@@ -107,7 +107,7 @@ def create_app() -> Flask:
     def gallery():
         return render_template("gallery.html")
 
-    # Route de debug optionnelle pour vérifier la DB utilisée
+    # Route de debug pour vérifier la DB utilisée (à retirer après)
     @app.route("/__db")
     def __db():
         url_str = db.engine.url.render_as_string(hide_password=True)
