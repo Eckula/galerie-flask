@@ -1,58 +1,34 @@
-# app.py ─────────────────────────────────────────────────────────────────────
-# Application Flask (complet)
-# - Priorité ENV (DATABASE_URL / SQLALCHEMY_DATABASE_URI) → Neon/Prod
-# - Fallback dev : SQLite ./instance/gallery.db (dossier auto-créé)
-# - Cache-busting /static via ?v=mtime
-# - Blueprints API : /api/media et /api/folders
-# - Route /preview/<id> : proxy PDF/Docs (fallback iframe)
-# - Auto-patch colonnes manquantes (SQLite uniquement)
-# ----------------------------------------------------------------------------
-
 from __future__ import annotations
-
-import os
-import sys
-import time
-import re
-import mimetypes
+import os, sys, time, re, mimetypes
 from urllib.parse import urlparse
 
 from flask import Flask, render_template, url_for, Response, abort
 from dotenv import load_dotenv
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 import requests
 
 from extensions import db, migrate
 
 
 def _normalize_db_url(uri: str) -> str:
-    """Normalise certaines variantes d'URL Postgres.
-    - 'postgres://' → 'postgresql://'
-    (on ne force pas '+psycopg' ici pour rester compatible avec l'env)"""
     if not uri:
         return uri
     if uri.startswith("postgres://"):
-        uri = "postgresql://" + uri[len("postgres://") :]
+        uri = "postgresql://" + uri[len("postgres://"):]
     return uri
 
 
 def _choose_db_uri(app: Flask) -> str:
-    """Priorité :
-    1) ENV: DATABASE_URL ou SQLALCHEMY_DATABASE_URI (ex: Neon)
-    2) Fallback: SQLite ./instance/gallery.db
-    """
     env_uri = os.getenv("DATABASE_URL") or os.getenv("SQLALCHEMY_DATABASE_URI")
     if env_uri:
         return _normalize_db_url(env_uri)
-
-    # Fallback SQLite local (assure l'existence de ./instance)
     os.makedirs(app.instance_path, exist_ok=True)
     sqlite_path = os.path.join(app.instance_path, "gallery.db").replace("\\", "/")
     return f"sqlite:///{sqlite_path}"
 
 
 def create_app() -> Flask:
-    # Charge .env si présent (n'écrase pas les variables déjà exportées)
     load_dotenv()
 
     app = Flask(
@@ -62,64 +38,50 @@ def create_app() -> Flask:
         template_folder="templates",
     )
 
-    # --- Config de base
-    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecret")
-    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
     # --- Base de données (ENV d'abord, sinon SQLite local)
     db_uri = _choose_db_uri(app)
     app.config["SQLALCHEMY_DATABASE_URI"] = db_uri
 
-from sqlalchemy.engine import make_url
-try:
-    url = make_url(db_uri)
-    app.logger.info("DB -> %s", url.render_as_string(hide_password=True))
-except Exception:
-    app.logger.info("DB -> %s", db_uri)
+    # Log de l'URI (mot de passe masqué)
+    try:
+        url = make_url(db_uri)
+        app.logger.info("DB -> %s", url.render_as_string(hide_password=True))
+    except Exception:
+        app.logger.info("DB -> %s", db_uri)
 
-    # --- Dev : réduire le cache et recharger les templates
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecret")
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
     if app.debug:
         app.config["TEMPLATES_AUTO_RELOAD"] = True
         app.jinja_env.auto_reload = True
         app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
-    # --- Cache-busting pour /static
+    # cache-busting /static
     @app.context_processor
     def override_url_for():
         def dated_url_for(endpoint, **values):
             if endpoint == "static":
                 filename = values.get("filename", "")
                 file_path = os.path.join(app.static_folder, filename)
-                if os.path.exists(file_path):
-                    values["v"] = int(os.stat(file_path).st_mtime)
-                else:
-                    values["v"] = int(time.time())
+                values["v"] = int(os.stat(file_path).st_mtime) if os.path.exists(file_path) else int(time.time())
             return url_for(endpoint, **values)
-
         return dict(url_for=dated_url_for)
 
-    # --- Init extensions
+    # Init extensions
     db.init_app(app)
     migrate.init_app(app, db)
 
-    # --- Création tables + auto-patch (SQLite uniquement)
+    # Création tables + auto-patch (SQLite uniquement)
     with app.app_context():
-        # Import tardif pour que db soit déjà lié à l'app
         from models import Media, Folder  # noqa: F401
-
         db.create_all()
-
         try:
-            # Auto-patch des colonnes manquantes seulement si backend SQLite
             if db.engine.url.get_backend_name() == "sqlite":
                 with db.engine.begin() as conn:
-                    app.logger.info("SQLite file: %s", db.engine.url.database)
-
                     def has_col(table: str, col: str) -> bool:
                         rows = conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
-                        # pragma table_info: (cid, name, type, notnull, dflt_value, pk)
                         return any(r[1] == col for r in rows)
-
                     if not has_col("media", "created_at"):
                         conn.execute(text('ALTER TABLE "media" ADD COLUMN "created_at" TEXT'))
                     if not has_col("folder", "created_at"):
@@ -129,14 +91,13 @@ except Exception:
         except Exception as e:
             app.logger.warning("Auto-patch schema skipped: %s", e)
 
-    # --- Blueprints API
+    # Blueprints
     from api.media import media_bp
     from api.folders import folders_bp
-
-    app.register_blueprint(media_bp, url_prefix="/api/media")
+    app.register_blueprint(media_bp,   url_prefix="/api/media")
     app.register_blueprint(folders_bp, url_prefix="/api/folders")
 
-    # --- Pages
+    # Pages
     @app.route("/")
     def home():
         return render_template("index.html")
@@ -146,29 +107,22 @@ except Exception:
     def gallery():
         return render_template("gallery.html")
 
-    # --- Preview proxy (PDF/Docs inline) + fallback HTML
+    # Preview proxy
     @app.route("/preview/<int:media_id>")
     def preview(media_id: int):
         from models import Media
-
         m = db.session.get(Media, media_id)
         if not m or not getattr(m, "url", None):
             abort(404)
         url = m.url
 
         def guess_mime(u: str) -> str:
-            if re.search(r"\.pdf(?:$|\?)", u, re.I):
-                return "application/pdf"
+            if re.search(r"\.pdf(?:$|\?)", u, re.I): return "application/pdf"
             mt, _ = mimetypes.guess_type(u)
             return mt or "application/octet-stream"
 
         ses = requests.Session()
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
-            )
-        }
+        headers = {"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"}
 
         try:
             h = ses.head(url, headers=headers, allow_redirects=True, timeout=8)
@@ -179,8 +133,7 @@ except Exception:
 
             def generate():
                 for chunk in r.iter_content(64 * 1024):
-                    if chunk:
-                        yield chunk
+                    if chunk: yield chunk
 
             resp = Response(generate(), mimetype=mime)
             resp.headers["Content-Disposition"] = f'inline; filename="{name}"'
@@ -188,7 +141,6 @@ except Exception:
             return resp
 
         except Exception:
-            # Fallback : iframe brut
             html = f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <style>html,body,iframe{{margin:0;border:0;height:100%;width:100%;background:#111}}</style>
@@ -197,26 +149,16 @@ except Exception:
 </body></html>"""
             return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
-    # Petit alias utile quand on lance `python app.py`
+    # alias utile si appelé via 'python app.py'
     sys.modules.setdefault("app", sys.modules[__name__])
 
     return app
 
-    @app.route("/__db")
-    def __db():
-        from sqlalchemy import text
-        url = db.engine.url.render_as_string(hide_password=True)
-        with db.engine.connect() as c:
-            f = c.execute(text("select count(*) from folder")).scalar_one()
-            m = c.execute(text("select count(*) from media")).scalar_one()
-        return {"url": url, "folder_count": f, "media_count": m}, 200
 
-
-# Instance de l'app (pour gunicorn, flask run, ou python app.py)
+# Instance globale
 app = create_app()
 
 if __name__ == "__main__":
-    # Respecte FLASK_DEBUG/FLASK_RUN_PORT si définis
     debug = os.getenv("FLASK_DEBUG", "0") in ("1", "true", "True")
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=debug)
