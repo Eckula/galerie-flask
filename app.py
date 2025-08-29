@@ -202,6 +202,15 @@ except Exception:
 
     return app
 
+    @app.route("/__db")
+    def __db():
+        from sqlalchemy import text
+        url = db.engine.url.render_as_string(hide_password=True)
+        with db.engine.connect() as c:
+            f = c.execute(text("select count(*) from folder")).scalar_one()
+            m = c.execute(text("select count(*) from media")).scalar_one()
+        return {"url": url, "folder_count": f, "media_count": m}, 200
+
 
 # Instance de l'app (pour gunicorn, flask run, ou python app.py)
 app = create_app()
