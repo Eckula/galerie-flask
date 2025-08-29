@@ -1,9 +1,9 @@
-# app.py — Flask + SQLAlchemy (pool Neon robuste)
+# app.py — Flask + SQLAlchemy (pool Neon robuste) + proxys fichiers
 from __future__ import annotations
 import os, sys, time, re, mimetypes
 from urllib.parse import urlparse
 
-from flask import Flask, render_template, url_for, Response, abort
+from flask import Flask, render_template, url_for, Response, abort, request
 from dotenv import load_dotenv
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -15,7 +15,6 @@ from extensions import db, migrate
 def _normalize_db_url(uri: str) -> str:
     if not uri:
         return uri
-    # compat Heroku-style
     if uri.startswith("postgres://"):
         uri = "postgresql://" + uri[len("postgres://"):]
     return uri
@@ -25,7 +24,6 @@ def _choose_db_uri(app: Flask) -> str:
     env_uri = os.getenv("DATABASE_URL") or os.getenv("SQLALCHEMY_DATABASE_URI")
     if env_uri:
         return _normalize_db_url(env_uri)
-    # fallback SQLite local pour le dev
     os.makedirs(app.instance_path, exist_ok=True)
     sqlite_path = os.path.join(app.instance_path, "gallery.db").replace("\\", "/")
     return f"sqlite:///{sqlite_path}"
@@ -37,21 +35,17 @@ def create_app() -> Flask:
     app = Flask(__name__, instance_relative_config=True,
                 static_folder="static", template_folder="templates")
 
-    # --- Base de données (ENV d'abord, sinon SQLite)
+    # --- DB
     db_uri = _choose_db_uri(app)
     app.config["SQLALCHEMY_DATABASE_URI"] = db_uri
-
-    # POOL ROBUSTE pour Neon (évite SSL SYSCALL EOF)
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-        "pool_pre_ping": True,                         # teste la connexion avant chaque requête
-        "pool_recycle": 280,                           # recycle < 300s (timeouts pooler)
+        "pool_pre_ping": True,
+        "pool_recycle": 280,
         "pool_size": int(os.getenv("DB_POOL_SIZE", "5")),
         "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "10")),
         "pool_timeout": 30,
         "connect_args": {"sslmode": "require", "connect_timeout": 10},
     }
-
-    # Log de l’URI (mdp masqué)
     try:
         url = make_url(db_uri)
         app.logger.info("DB -> %s", url.render_as_string(hide_password=True))
@@ -61,7 +55,6 @@ def create_app() -> Flask:
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecret")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # cache-busting /static
     if app.debug:
         app.config["TEMPLATES_AUTO_RELOAD"] = True
         app.jinja_env.auto_reload = True
@@ -77,11 +70,9 @@ def create_app() -> Flask:
             return url_for(endpoint, **values)
         return dict(url_for=dated_url_for)
 
-    # Init extensions
     db.init_app(app)
     migrate.init_app(app, db)
 
-    # Création tables si SQLite + warm-up DB (ne plante pas si KO)
     with app.app_context():
         from models import Media, Folder  # noqa
         try:
@@ -91,7 +82,6 @@ def create_app() -> Flask:
         except Exception as e:
             app.logger.warning("DB warmup failed: %s", e)
 
-    # Teardown: ferme proprement la session à chaque requête
     @app.teardown_appcontext
     def _shutdown_session(exc=None):
         db.session.remove()
@@ -112,7 +102,7 @@ def create_app() -> Flask:
     def gallery():
         return render_template("gallery.html")
 
-    # Route debug (peut être supprimée après vérif)
+    # Debug DB
     @app.route("/__db")
     def __db():
         url_str = db.engine.url.render_as_string(hide_password=True)
@@ -123,55 +113,62 @@ def create_app() -> Flask:
             return {"url": url_str, "error": str(e)}, 500
         return {"url": url_str, "folder_count": f, "media_count": m}, 200
 
-    # Proxy /preview/<id> (PDF/Docs)
-    @app.route("/preview/<int:media_id>")
-    def preview(media_id: int):
-        from models import Media
-        m = db.session.get(Media, media_id)
-        if not m or not getattr(m, "url", None):
-            abort(404)
-        url = m.url
+    # ---------- Streaming helpers ----------
+    _UA = {"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"}
 
-        def guess_mime(u: str) -> str:
-            if re.search(r"\.pdf(?:$|\?)", u, re.I): return "application/pdf"
-            mt, _ = mimetypes.guess_type(u)
-            return mt or "application/octet-stream"
+    def _guess_mime_from_url(u: str) -> str:
+        if re.search(r"\.pdf(?:$|\?)", u, re.I): return "application/pdf"
+        mt, _ = mimetypes.guess_type(u)
+        return mt or "application/octet-stream"
 
+    def _stream_remote(url: str, filename: str | None = None, force_mime: str | None = None):
         ses = requests.Session()
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"}
-
         try:
-            h = ses.head(url, headers=headers, allow_redirects=True, timeout=8)
-            mime = (h.headers.get("Content-Type") if h.ok else None) or guess_mime(url)
-            r = ses.get(h.url if h.ok else url, headers=headers, stream=True, allow_redirects=True, timeout=20)
+            h = ses.head(url, headers=_UA, allow_redirects=True, timeout=8)
+            mime = force_mime or (h.headers.get("Content-Type") if h.ok else None) or _guess_mime_from_url(url)
+            r = ses.get(h.url if h.ok else url, headers=_UA, stream=True, allow_redirects=True, timeout=20)
             r.raise_for_status()
-            name = os.path.basename(urlparse(r.url).path) or f"file-{media_id}"
-
+            name = filename or os.path.basename(urlparse(r.url).path) or "file"
             def generate():
                 for chunk in r.iter_content(64 * 1024):
-                    if chunk:
-                        yield chunk
-
+                    if chunk: yield chunk
             resp = Response(generate(), mimetype=mime)
             resp.headers["Content-Disposition"] = f'inline; filename="{name}"'
             resp.headers["Cache-Control"] = "public, max-age=3600"
             return resp
-
         except Exception:
+            # Last resort: simple iframe fallback (still works for most viewers)
             html = f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <style>html,body,iframe{{margin:0;border:0;height:100%;width:100%;background:#111}}</style>
-</head><body>
-  <iframe src="{url}" title="Document"></iframe>
-</body></html>"""
+</head><body><iframe src="{url}" title="Document"></iframe></body></html>"""
             return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+    # Existing PDF proxy (kept for direct PDF opening)
+    @app.route("/preview/<int:media_id>")
+    def preview(media_id: int):
+        from models import Media
+        m = db.session.get(Media, media_id)
+        if not m or not getattr(m, "url", None): abort(404)
+        return _stream_remote(m.url)
+
+    # NEW: generic file proxy with extension in PATH (great for Office/Google viewers)
+    # Example URL we will give to viewers:
+    #   https://<yourapp>/file/123/my-doc.docx
+    @app.route("/file/<int:media_id>/<path:filename>")
+    def file_with_ext(media_id: int, filename: str):
+        from models import Media
+        m = db.session.get(Media, media_id)
+        if not m or not getattr(m, "url", None): abort(404)
+        ext = os.path.splitext(filename)[1].lower()
+        mime = mimetypes.types_map.get(ext, None) if ext else None
+        return _stream_remote(m.url, filename=filename, force_mime=mime)
 
     # alias utile si "python app.py"
     sys.modules.setdefault("app", sys.modules[__name__])
     return app
 
 
-# Instance globale
 app = create_app()
 
 if __name__ == "__main__":

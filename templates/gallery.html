@@ -1,4 +1,3 @@
-<!-- templates/gallery.html -->
 {% extends "base.html" %}
 {% block title %}Famille Ledain — Galerie{% endblock %}
 {% block section %}Galerie{% endblock %}
@@ -48,11 +47,9 @@
     <button id="selectAllBtn" class="pill">Tout sélectionner (vue)</button>
     <button id="deleteSelBtn" class="pill">Supprimer sélection</button>
     <button id="downloadSelBtn" class="pill">Télécharger (vue)</button>
-
-    <!-- MULTI-FICHIERS -->
     <label class="pill btn-file"><span>+ Ajouter des médias</span>
       <input id="fileInput" type="file" multiple
-             accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
+             accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.odp,.txt,.csv" hidden>
     </label>
     <button id="addYT" class="pill">+ Lien YouTube</button>
   </div>
@@ -60,7 +57,7 @@
 
 <form id="uploadForm" action="/api/media/upload" method="post" enctype="multipart/form-data" class="upload-panel" hidden>
   <input type="file" name="image" id="uploadFileHidden" multiple
-         accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" required hidden>
+         accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.odp,.txt,.csv" required hidden>
   <div class="row">
     <label>Album existant : <select name="folder_id" id="folderSelect"><option value="">— Choisir —</option></select></label>
     <span>ou</span>
@@ -86,11 +83,8 @@
         <button id="lbAltViewer" class="pill" hidden>Autre visionneuse</button>
       </div>
     </div>
-
-    <!-- Zone média -->
     <div class="lb-media" id="lbMedia"></div>
 
-    <!-- Couche GESTE: 3 zones, bas libre -->
     <div class="lb-gesture">
       <div class="lb-swipe-zone left"   id="swL"></div>
       <div class="lb-swipe-zone center" id="swC"></div>
@@ -103,7 +97,7 @@
 </div>
 
 <script>
-/* ====== State & helpers ====== */
+/* ===== Helpers ===== */
 const grid=document.getElementById('grid'), chips=document.getElementById('albumChips');
 const folderSelect=document.getElementById('folderSelect'), uploadForm=document.getElementById('uploadForm');
 const fileInputBtn=document.getElementById('fileInput'), hiddenFile=document.getElementById('uploadFileHidden'), msg=document.getElementById('msg');
@@ -126,12 +120,24 @@ if(currentType==='gallery'||currentType==='albums') currentType='all';
 let offset=0, limit=60, loading=false, has_more=true;
 const selected=new Set(); let visibleItems=[]; let lbIndex=0; let cachedFolders=[];
 
-const isPDF=u=>/\.pdf($|\?)/i.test(u||'');
-const isOffice=u=>/\.(docx?|pptx?|xlsx?)($|\?)/i.test(u||'');
+const isPDF=u=>/\.pdf(?:$|\?)/i.test(u||'');
+const isOffice=u=>/\.(?:docx?|pptx?|xlsx?|odt|ods|odp|txt|csv)(?:$|\?)/i.test(u||'');
 const isYT=u=>(/youtu\.be|youtube\.com/i.test(u||''));
-const ytId=u=>{const m=(u||'').match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{6,})/);return m?m[1]:null;};
+const _ext = u => ((u||'').split('?')[0].toLowerCase().match(/\.([a-z0-9]+)$/)||[])[1]||'';
+
 function h(t,p={},...c){const e=document.createElement(t);Object.assign(e,p);for(const x of c){e.append(x?.nodeType?x:document.createTextNode(x))}return e;}
 function setActiveTab(t){currentType=t; document.querySelectorAll('#typeTabs .tab').forEach(b=>b.classList.toggle('active', b.dataset.type===t));}
+function classify(item){
+  const k=(item.kind||'').toLowerCase();
+  if(['photos','videos','audio','documents'].includes(k)) return k;
+  const u=item.url||''; const e=_ext(u);
+  if(isYT(u)) return 'videos';
+  if(/^(jpe?g|png|gif|webp|bmp|svg|heic|heif|avif)$/.test(e)) return 'photos';
+  if(/^(mp4|webm|ogg|mov|m4v|3gp|mkv)$/.test(e)) return 'videos';
+  if(/^(mp3|wav|m4a|aac|flac|oga|ogg)$/.test(e)) return 'audio';
+  if(isPDF(u) || isOffice(u) || u.includes('/raw/upload/')) return 'documents';
+  return 'documents';
+}
 
 /* ===== Albums ===== */
 async function loadFolders(){
@@ -167,8 +173,21 @@ async function loadNextPage(){
       `/api/media/list/${currentFolder}?mode=paged&offset=${offset}&limit=${limit}`;
     const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
     const d=await r.json();
-    const items = Array.isArray(d) ? d.map(x=>({...x,kind:'photos',thumb:x.url})) : d.items;
-    has_more = Array.isArray(d) ? false : d.has_more; offset = Array.isArray(d) ? 0 : (d.next_offset ?? offset);
+
+    const raw = Array.isArray(d) ? d : (d.items||[]);
+    const items = raw.map(x=>{
+      const k = x.kind || classify(x);
+      let thumb = x.thumb;
+      if(!thumb && k==='videos' && isYT(x.url)){
+        const m=(x.url||'').match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{6,})/);
+        const id=m?m[1]:null; if(id) thumb=`https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+      }
+      return {...x, kind:k, thumb, ext:(x.ext||_ext(x.url))};
+    });
+
+    has_more = Array.isArray(d) ? false : !!d.has_more;
+    offset   = Array.isArray(d) ? 0     : (d.next_offset ?? offset);
+
     appendCards(items.filter(x => currentType==='all' ? true : x.kind===currentType));
   }catch(e){
     if(!grid.children.length) grid.innerHTML='<p class="muted">Erreur de chargement.</p>';
@@ -182,9 +201,9 @@ function appendCards(items){
 
     if(m.kind==='videos'){
       const idx=visibleItems.push(m)-1;
-      let srcThumb = m.thumb;
-      if(isYT(m.url)){ const id=ytId(m.url); srcThumb = id?`https://img.youtube.com/vi/${id}/hqdefault.jpg`:m.thumb; }
-      el=h('img',{src:srcThumb,loading:'lazy',style:'cursor:zoom-in'}); el.onclick=(e)=>{e.stopPropagation();openLightbox(idx);}
+      const srcThumb = m.thumb || '';
+      el=h('img',{src:srcThumb||m.url,loading:'lazy',style:'cursor:zoom-in'}); el.onerror=()=>{ if(srcThumb) el.src=m.url; };
+      el.onclick=(e)=>{e.stopPropagation();openLightbox(idx);}
 
     }else if(m.kind==='audio'){
       el=h('div',{className:'audio-box'}, h('span',{className:'emoji'},'🎵'), h('audio',{src:m.url,controls:true}));
@@ -210,7 +229,7 @@ function appendCards(items){
   }
 }
 
-/* ===== Admin albums ===== */
+/* ===== Actions / Upload etc. (inchangé sauf multi) ===== */
 document.getElementById('manageToggle').onclick=()=> adminPanel.hidden = !adminPanel.hidden;
 document.getElementById('albumSearch').oninput=()=> loadFolders();
 document.getElementById('albumSort').onchange=()=> loadFolders();
@@ -224,8 +243,6 @@ document.getElementById('mergeBtn').onclick=async()=>{
   await fetch('/api/folders/merge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_id:Number(s),target_id:Number(t)})});
   await loadFolders(); resetAndLoad();
 };
-
-/* ===== Actions ===== */
 document.getElementById('refreshBtn').onclick=()=> resetAndLoad();
 document.getElementById('selectAllBtn').onclick=()=> document.querySelectorAll('.grid .cell .sel-box').forEach(cb=>{ cb.checked=true; cb.dispatchEvent(new Event('change')); });
 document.getElementById('deleteSelBtn').onclick=async()=>{
@@ -242,12 +259,9 @@ document.getElementById('downloadSelBtn').onclick=()=>{
   });
   urls.slice(0,10).forEach(u=> window.open(u,'_blank'));
 };
-
-/* ===== Upload MULTI ===== */
 fileInputBtn.onchange=()=>{
   if(fileInputBtn.files?.length){
-    hiddenFile.files=fileInputBtn.files; 
-    uploadForm.hidden=false;
+    hiddenFile.files=fileInputBtn.files; uploadForm.hidden=false;
     msg.textContent = `${hiddenFile.files.length} fichier(s) sélectionné(s)`;
   }
 };
@@ -255,24 +269,25 @@ uploadForm.onsubmit=async(e)=>{
   e.preventDefault();
   const files=[...hiddenFile.files||[]];
   if(!files.length){ msg.textContent='Choisissez des fichiers'; return; }
-
   let ok=0, ko=0;
   for(const f of files){
-    const fd=new FormData(uploadForm);
-    fd.set('image', f);
-    try{
-      const r=await fetch('/api/media/upload',{method:'POST',body:fd});
-      const d=await r.json();
-      d.ok ? ok++ : ko++;
-    }catch{ ko++; }
+    const fd=new FormData(uploadForm); fd.set('image', f);
+    try{ const r=await fetch('/api/media/upload',{method:'POST',body:fd}); const d=await r.json(); d.ok?ok++:ko++; }
+    catch{ ko++; }
     msg.textContent=`Téléversés: ${ok}/${files.length} — échecs: ${ko}`;
   }
-  uploadForm.reset(); fileInputBtn.value=''; hiddenFile.value='';
-  uploadForm.hidden=true; 
+  uploadForm.reset(); fileInputBtn.value=''; hiddenFile.value=''; uploadForm.hidden=true;
   await loadFolders(); resetAndLoad();
 };
+addYT.onclick=async()=>{
+  const url=prompt('Collez l’URL YouTube'); if(!url) return;
+  const folder_id = folderSelect.value ? Number(folderSelect.value) : null;
+  const new_folder = (!folder_id && newFolderInput.value.trim()) ? newFolderInput.value.trim() : null;
+  const r=await fetch('/api/media/add_youtube',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,folder_id,new_folder})});
+  const d=await r.json(); if(d.ok){ await loadFolders(); resetAndLoad(); } else { alert('Lien invalide'); }
+};
 
-/* ===== Tabs / Infinite scroll ===== */
+/* ===== Tabs & Infinite scroll ===== */
 typeTabs.addEventListener('click',(e)=>{
   if(!(e.target instanceof HTMLButtonElement)) return;
   setActiveTab(e.target.dataset.type); resetAndLoad();
@@ -280,21 +295,23 @@ typeTabs.addEventListener('click',(e)=>{
 });
 new IntersectionObserver((es)=>{ if(es[0].isIntersecting) loadNextPage(); }, {rootMargin:"800px"}).observe(sentinel);
 
-/* ===== Lightbox + vidéos (autoplay ON) ===== */
-function openLightbox(i){ if(!visibleItems.length)return; lbIndex=Math.max(0,Math.min(i,visibleItems.length-1)); renderLB('office'); lb.classList.add('open'); lb.setAttribute('aria-hidden','false'); }
+/* ===== Lightbox (docs -> proxy URL with extension) ===== */
+function openLightbox(i){ if(!visibleItems.length)return; lbIndex=Math.max(0,Math.min(i,visibleItems.length-1)); renderLB('auto'); lb.classList.add('open'); lb.setAttribute('aria-hidden','false'); }
 function closeLightbox(){ lb.classList.remove('open'); lb.setAttribute('aria-hidden','true'); lbMedia.innerHTML=''; }
 function navLB(d, anim=true){
   lbIndex=(lbIndex+d+visibleItems.length)%visibleItems.length;
-  renderLB('office');
+  renderLB('auto');
   if(anim){ lbMedia.classList.add(d>0?'swipe-left':'swipe-right'); setTimeout(()=>lbMedia.classList.remove('swipe-left','swipe-right'), 200); }
 }
 
-function renderLB(pref='office'){
+function renderLB(pref='auto'){
   const it=visibleItems[lbIndex]; lbMedia.innerHTML=''; lbAltViewer.hidden=true;
+  const ext=(it.ext||_ext(it.url))||'doc';
+  const origin = location.origin;
 
   if(it.kind==='videos'){
     if(isYT(it.url)){
-      const id=ytId(it.url);
+      const id=(it.url||'').match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{6,})/)?.[1];
       const fr=document.createElement('iframe');
       fr.src=`https://www.youtube-nocookie.com/embed/${id}?autoplay=1&controls=1&rel=0&modestbranding=1&playsinline=1&fs=1`;
       fr.allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen';
@@ -307,17 +324,20 @@ function renderLB(pref='office'){
       v.src=it.url; v.controls=true; v.autoplay=true; v.playsInline=true; v.preload='metadata';
       v.setAttribute('webkit-playsinline','');
       lbMedia.append(v);
-      // tente de lancer si bloqué par navigateur
       setTimeout(()=>{ v.play().catch(()=>{}); }, 0);
     }
   }else if(it.kind==='documents'){
     if(isPDF(it.url)){
       const fr=document.createElement('iframe'); fr.src=`/preview/${it.id}`; fr.loading='lazy'; fr.setAttribute('frameborder','0'); fr.style.width='100%'; fr.style.height='100%'; lbMedia.append(fr);
     }else{
-      const office='https://view.officeapps.live.com/op/embed.aspx?src='+encodeURIComponent(it.url);
-      const gdocs ='https://docs.google.com/gview?embedded=1&hl=fr&url='+encodeURIComponent(it.url);
-      const fr=document.createElement('iframe'); fr.src=(pref==='gdocs')?gdocs:office; fr.loading='lazy'; fr.setAttribute('frameborder','0'); fr.style.width='100%'; fr.style.height='100%';
-      lbAltViewer.hidden=false; lbAltViewer.textContent=(pref==='gdocs')?'Visionneuse Office':'Visionneuse Google'; lbAltViewer.onclick=()=>renderLB(pref==='gdocs'?'office':'gdocs');
+      // Use our proxy URL that contains an extension in the path
+      const prox = `${origin}/file/${it.id}/document-${it.id}.${ext}`;
+      const legacy = /^(doc|xls|ppt|txt|csv|odt|ods|odp)$/i.test(ext);
+      const office='https://view.officeapps.live.com/op/embed.aspx?src='+encodeURIComponent(prox);
+      const gdocs ='https://docs.google.com/gview?embedded=1&hl=fr&url='+encodeURIComponent(prox);
+      const useG  = (pref==='gdocs') || (pref==='auto' && legacy);
+      const fr=document.createElement('iframe'); fr.src=useG?gdocs:office; fr.loading='lazy'; fr.setAttribute('frameborder','0'); fr.style.width='100%'; fr.style.height='100%';
+      lbAltViewer.hidden=false; lbAltViewer.textContent=useG?'Visionneuse Office':'Visionneuse Google'; lbAltViewer.onclick=()=>renderLB(useG?'office':'gdocs');
       lbMedia.append(fr);
     }
   }else{
@@ -330,42 +350,17 @@ lbPrev.onclick=()=>navLB(-1);
 lbNext.onclick=()=>navLB(1);
 lbClose.onclick=(e)=>{e.stopPropagation(); closeLightbox();};
 lbBackdrop.onclick=closeLightbox;
-window.addEventListener('keydown',(e)=>{ if(lb.classList.contains('open')){ if(e.key==='Escape')closeLightbox(); if(e.key==='ArrowRight')navLB(1); if(e.key==='ArrowLeft')navLB(-1); }});
 
-/* ===== Swipe: 3 zones (gauche / centre / droite). Tap => clic natif (play/pause, plein écran). ===== */
+/* ===== Swipe zones ===== */
 (function enableSwipe(){
   function bindSwipe(el){
     let sx=0, sy=0, active=false, pid=null;
     const abs=Math.abs, TH=Math.max(40, innerWidth*0.10);
-
-    el.addEventListener('pointerdown', e=>{
-      active=true; pid=e.pointerId; sx=e.clientX; sy=e.clientY;
-      try{ el.setPointerCapture(pid); }catch{}
-    }, {passive:true});
-
-    el.addEventListener('pointermove', e=>{
-      if(!active || e.pointerId!==pid) return;
-      const dx=e.clientX-sx, dy=e.clientY-sy;
-      if(abs(dx)>abs(dy) && abs(dx)>12){ e.preventDefault(); } // swipe horizontal → bloque le scroll
-    }, {passive:false});
-
-    el.addEventListener('pointerup', e=>{
-      if(!active || e.pointerId!==pid) return;
-      active=false; pid=null;
-      const dx=e.clientX-sx, dy=e.clientY-sy;
-
-      if(abs(dx)>abs(dy) && abs(dx)>TH){
-        navLB(dx>0 ? -1 : 1);        // swipe
-      }else{
-        // TAP court → on laisse passer le clic vers la vidéo/iframe (play/pause, FS)
-        el.style.pointerEvents='none';
-        setTimeout(()=>{ el.style.pointerEvents='auto'; }, 300);
-      }
-    }, {passive:true});
-
+    el.addEventListener('pointerdown', e=>{ active=true; pid=e.pointerId; sx=e.clientX; sy=e.clientY; try{ el.setPointerCapture(pid); }catch{}; }, {passive:true});
+    el.addEventListener('pointermove', e=>{ if(!active||e.pointerId!==pid) return; const dx=e.clientX-sx, dy=e.clientY-sy; if(abs(dx)>abs(dy) && abs(dx)>12){ e.preventDefault(); } }, {passive:false});
+    el.addEventListener('pointerup', e=>{ if(!active||e.pointerId!==pid) return; active=false; pid=null; const dx=e.clientX-sx, dy=e.clientY-sy; if(abs(dx)>abs(dy) && abs(dx)>TH){ navLB(dx>0 ? -1 : 1); } else { el.style.pointerEvents='none'; setTimeout(()=>{ el.style.pointerEvents='auto'; }, 300); } }, {passive:true});
     el.addEventListener('pointercancel', ()=>{ active=false; pid=null; }, {passive:true});
   }
-
   ['swL','swC','swR'].forEach(id=>{ const z=document.getElementById(id); if(z) bindSwipe(z); });
 })();
 </script>
