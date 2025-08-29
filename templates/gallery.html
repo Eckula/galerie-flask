@@ -59,7 +59,6 @@
 </div>
 
 <form id="uploadForm" action="/api/media/upload" method="post" enctype="multipart/form-data" class="upload-panel" hidden>
-  <!-- MULTI-FICHIERS: on boucle côté JS, backend inchangé ('image') -->
   <input type="file" name="image" id="uploadFileHidden" multiple
          accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" required hidden>
   <div class="row">
@@ -87,9 +86,16 @@
         <button id="lbAltViewer" class="pill" hidden>Autre visionneuse</button>
       </div>
     </div>
+
+    <!-- Zone média -->
     <div class="lb-media" id="lbMedia"></div>
-    <!-- Couche GESTE (capte les swipes même au-dessus d'un iframe) -->
-    <div class="lb-gesture" id="lbGesture"></div>
+
+    <!-- Couche GESTE: 3 zones, bas libre -->
+    <div class="lb-gesture">
+      <div class="lb-swipe-zone left"   id="swL"></div>
+      <div class="lb-swipe-zone center" id="swC"></div>
+      <div class="lb-swipe-zone right"  id="swR"></div>
+    </div>
 
     <button class="lb-prev" id="lbPrev" aria-label="Précédent">←</button>
     <button class="lb-next" id="lbNext" aria-label="Suivant">→</button>
@@ -104,16 +110,15 @@ const fileInputBtn=document.getElementById('fileInput'), hiddenFile=document.get
 const typeTabs=document.getElementById('typeTabs'), sentinel=document.getElementById('sentinel');
 const searchEl=document.getElementById('albumSearch'), sortEl=document.getElementById('albumSort'), adminToggle=document.getElementById('manageToggle');
 const adminPanel=document.getElementById('albumAdmin');
-const rnSel=document.getElementById('renameFolderSel'), rnName=document.getElementById('renameFolderName'), rnBtn=document.getElementById('renameBtn');
-const mSrc=document.getElementById('mergeSrcSel'), mDst=document.getElementById('mergeDstSel'), mBtn=document.getElementById('mergeBtn');
+const rnSel=document.getElementById('renameFolderSel'), rnName=document.getElementById('renameFolderName');
+const mSrc=document.getElementById('mergeSrcSel'), mDst=document.getElementById('mergeDstSel');
 const addYT=document.getElementById('addYT'), newFolderInput=document.getElementById('newFolderInput');
 
 const lb=document.getElementById('lightbox'), lbMedia=document.getElementById('lbMedia'),
       lbPrev=document.getElementById('lbPrev'), lbNext=document.getElementById('lbNext'),
       lbClose=document.getElementById('lbClose'), lbCounter=document.getElementById('lbCounter'),
       lbOpen=document.getElementById('lbOpen'), lbDownload=document.getElementById('lbDownload'),
-      lbBackdrop=document.getElementById('lbBackdrop'), lbAltViewer=document.getElementById('lbAltViewer'),
-      lbGesture=document.getElementById('lbGesture');
+      lbBackdrop=document.getElementById('lbBackdrop'), lbAltViewer=document.getElementById('lbAltViewer');
 
 let currentFolder=null;
 let currentType=(new URLSearchParams(location.search).get('tab')||'all').toLowerCase();
@@ -125,7 +130,6 @@ const isPDF=u=>/\.pdf($|\?)/i.test(u||'');
 const isOffice=u=>/\.(docx?|pptx?|xlsx?)($|\?)/i.test(u||'');
 const isYT=u=>(/youtu\.be|youtube\.com/i.test(u||''));
 const ytId=u=>{const m=(u||'').match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{6,})/);return m?m[1]:null;};
-
 function h(t,p={},...c){const e=document.createElement(t);Object.assign(e,p);for(const x of c){e.append(x?.nodeType?x:document.createTextNode(x))}return e;}
 function setActiveTab(t){currentType=t; document.querySelectorAll('#typeTabs .tab').forEach(b=>b.classList.toggle('active', b.dataset.type===t));}
 
@@ -213,7 +217,7 @@ document.getElementById('albumSort').onchange=()=> loadFolders();
 document.getElementById('renameBtn').onclick=async()=>{
   const id=rnSel.value, name=rnName.value.trim(); if(!id||!name) return;
   await fetch('/api/folders/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:Number(id),new_name:name})});
-  rnName.value=''; await loadFolders(); resetAndLoad();
+  document.getElementById('renameFolderName').value=''; await loadFolders(); resetAndLoad();
 };
 document.getElementById('mergeBtn').onclick=async()=>{
   const s=mSrc.value, t=mDst.value; if(!s||!t||s===t) return;
@@ -268,17 +272,6 @@ uploadForm.onsubmit=async(e)=>{
   await loadFolders(); resetAndLoad();
 };
 
-/* ===== Lien YouTube ===== */
-addYT.onclick=async()=>{
-  const url=prompt('Collez l’URL YouTube (https://youtu.be/... ou https://www.youtube.com/watch?v=...)');
-  if(!url) return;
-  const folder_id = folderSelect.value ? Number(folderSelect.value) : null;
-  const new_folder = (!folder_id && newFolderInput.value.trim()) ? newFolderInput.value.trim() : null;
-  const r=await fetch('/api/media/add_youtube',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,folder_id,new_folder})});
-  const d=await r.json();
-  if(d.ok){ await loadFolders(); resetAndLoad(); } else { alert('Lien YouTube invalide.'); }
-};
-
 /* ===== Tabs / Infinite scroll ===== */
 typeTabs.addEventListener('click',(e)=>{
   if(!(e.target instanceof HTMLButtonElement)) return;
@@ -287,7 +280,7 @@ typeTabs.addEventListener('click',(e)=>{
 });
 new IntersectionObserver((es)=>{ if(es[0].isIntersecting) loadNextPage(); }, {rootMargin:"800px"}).observe(sentinel);
 
-/* ===== Lightbox + SWIPE ===== */
+/* ===== Lightbox + vidéos (autoplay ON) ===== */
 function openLightbox(i){ if(!visibleItems.length)return; lbIndex=Math.max(0,Math.min(i,visibleItems.length-1)); renderLB('office'); lb.classList.add('open'); lb.setAttribute('aria-hidden','false'); }
 function closeLightbox(){ lb.classList.remove('open'); lb.setAttribute('aria-hidden','true'); lbMedia.innerHTML=''; }
 function navLB(d, anim=true){
@@ -295,6 +288,7 @@ function navLB(d, anim=true){
   renderLB('office');
   if(anim){ lbMedia.classList.add(d>0?'swipe-left':'swipe-right'); setTimeout(()=>lbMedia.classList.remove('swipe-left','swipe-right'), 200); }
 }
+
 function renderLB(pref='office'){
   const it=visibleItems[lbIndex]; lbMedia.innerHTML=''; lbAltViewer.hidden=true;
 
@@ -302,18 +296,21 @@ function renderLB(pref='office'){
     if(isYT(it.url)){
       const id=ytId(it.url);
       const fr=document.createElement('iframe');
-      fr.src=`https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
-      fr.allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
-      fr.allowFullscreen=true; fr.loading='lazy'; fr.setAttribute('frameborder','0');
+      fr.src=`https://www.youtube-nocookie.com/embed/${id}?autoplay=1&controls=1&rel=0&modestbranding=1&playsinline=1&fs=1`;
+      fr.allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen';
+      fr.allowFullscreen = true;
+      fr.loading='lazy'; fr.setAttribute('frameborder','0');
       fr.style.width='100%'; fr.style.height='100%';
       lbMedia.append(fr);
-      const timer=setTimeout(()=>{ if(lbMedia.contains(fr)){ const box=document.createElement('div'); box.style.display='grid'; box.style.placeItems='center'; box.style.height='100%'; box.innerHTML=`<div style="text-align:center"><p>Cette vidéo ne permet pas l’intégration.</p><a class="pill" href="https://www.youtube.com/watch?v=${id}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></div>`; lbMedia.innerHTML=''; lbMedia.append(box); }}, 2000);
-      fr.onload=()=>clearTimeout(timer);
     }else{
-      const v=document.createElement('video'); v.src=it.url; v.controls=true; v.autoplay=true; v.playsInline=true; v.poster=it.thumb||''; lbMedia.append(v);
+      const v=document.createElement('video');
+      v.src=it.url; v.controls=true; v.autoplay=true; v.playsInline=true; v.preload='metadata';
+      v.setAttribute('webkit-playsinline','');
+      lbMedia.append(v);
+      // tente de lancer si bloqué par navigateur
+      setTimeout(()=>{ v.play().catch(()=>{}); }, 0);
     }
   }else if(it.kind==='documents'){
-    const isPDF=u=>/\.pdf($|\?)/i.test(u||''); const isOffice=u=>/\.(docx?|pptx?|xlsx?)($|\?)/i.test(u||'');
     if(isPDF(it.url)){
       const fr=document.createElement('iframe'); fr.src=`/preview/${it.id}`; fr.loading='lazy'; fr.setAttribute('frameborder','0'); fr.style.width='100%'; fr.style.height='100%'; lbMedia.append(fr);
     }else{
@@ -335,38 +332,41 @@ lbClose.onclick=(e)=>{e.stopPropagation(); closeLightbox();};
 lbBackdrop.onclick=closeLightbox;
 window.addEventListener('keydown',(e)=>{ if(lb.classList.contains('open')){ if(e.key==='Escape')closeLightbox(); if(e.key==='ArrowRight')navLB(1); if(e.key==='ArrowLeft')navLB(-1); }});
 
-/* Swipe tactile via couche 'lb-gesture' (marche aussi sur iframe) */
+/* ===== Swipe: 3 zones (gauche / centre / droite). Tap => clic natif (play/pause, plein écran). ===== */
 (function enableSwipe(){
-  const area = lbGesture; let startX=0, startY=0, tracking=false, pid=null;
-  const abs = Math.abs, TH = Math.max(35, innerWidth*0.10);   // seuil un peu plus souple
+  function bindSwipe(el){
+    let sx=0, sy=0, active=false, pid=null;
+    const abs=Math.abs, TH=Math.max(40, innerWidth*0.10);
 
-  area.addEventListener('pointerdown', (e)=>{
-    tracking = true; pid = e.pointerId; startX = e.clientX; startY = e.clientY;
-    try{ area.setPointerCapture(pid); }catch{}
-  }, {passive:true});
+    el.addEventListener('pointerdown', e=>{
+      active=true; pid=e.pointerId; sx=e.clientX; sy=e.clientY;
+      try{ el.setPointerCapture(pid); }catch{}
+    }, {passive:true});
 
-  area.addEventListener('pointermove', (e)=>{
-    if(!tracking || e.pointerId!==pid) return;
-    const dx = e.clientX - startX, dy = e.clientY - startY;
-    // horizontal => on empêche le scroll
-    if(abs(dx) > abs(dy) && abs(dx) > 12){ e.preventDefault(); }
-  }, {passive:false});
+    el.addEventListener('pointermove', e=>{
+      if(!active || e.pointerId!==pid) return;
+      const dx=e.clientX-sx, dy=e.clientY-sy;
+      if(abs(dx)>abs(dy) && abs(dx)>12){ e.preventDefault(); } // swipe horizontal → bloque le scroll
+    }, {passive:false});
 
-  area.addEventListener('pointerup', (e)=>{
-    if(!tracking || e.pointerId!==pid) return;
-    const dx = e.clientX - startX, dy = e.clientY - startY;
-    tracking = false; pid = null;
+    el.addEventListener('pointerup', e=>{
+      if(!active || e.pointerId!==pid) return;
+      active=false; pid=null;
+      const dx=e.clientX-sx, dy=e.clientY-sy;
 
-    if(Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > TH){
-      navLB(dx>0 ? -1 : 1);
-    }else if(Math.abs(dx) < 8 && Math.abs(dy) < 8){
-      // TAP : on “relaye” le clic à l’élément dessous (ex: play vidéo)
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      if(el && el !== area) el.click?.();
-    }
-  }, {passive:true});
+      if(abs(dx)>abs(dy) && abs(dx)>TH){
+        navLB(dx>0 ? -1 : 1);        // swipe
+      }else{
+        // TAP court → on laisse passer le clic vers la vidéo/iframe (play/pause, FS)
+        el.style.pointerEvents='none';
+        setTimeout(()=>{ el.style.pointerEvents='auto'; }, 300);
+      }
+    }, {passive:true});
 
-  area.addEventListener('pointercancel', ()=>{ tracking=false; pid=null; }, {passive:true});
+    el.addEventListener('pointercancel', ()=>{ active=false; pid=null; }, {passive:true});
+  }
+
+  ['swL','swC','swR'].forEach(id=>{ const z=document.getElementById(id); if(z) bindSwipe(z); });
 })();
 </script>
 
